@@ -32,6 +32,13 @@ def _new_uuid() -> str:
     return uuid.uuid4().hex
 
 
+class AppIdConflictError(Exception):
+    """app_id 已被占用，且无法按软删除复活（在用中，或软删除记录属于其他租户）。"""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+
 # --------------------------------------------------------------------------- 应用（注册表）
 
 def create_app(
@@ -48,6 +55,22 @@ def create_app(
     app_uuid: str = "",
 ) -> App:
     with session_scope() as session:
+        existing = session.scalar(select(App).where(App.app_id == app_id))
+        if existing is not None:
+            if not existing.is_deleted:
+                raise AppIdConflictError(f"app_id 已存在：{app_id}")
+            if existing.tenant_code != tenant_code:
+                raise AppIdConflictError(f"app_id 属于其他租户：{app_id}")
+            existing.api_key = api_key
+            existing.app_name = app_name
+            existing.app_type = app_type
+            existing.icon = icon
+            existing.opening_statement = opening_statement
+            existing.suggested_questions = suggested_questions or []
+            existing.app_info = app_info or {}
+            existing.is_deleted = 0
+            session.flush()
+            return existing
         row = App(
             uuid=app_uuid or _new_uuid(),
             tenant_code=tenant_code,

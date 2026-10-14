@@ -68,17 +68,20 @@ def create_app(request: AppCreateRequest, principal: AdminPrincipal = Depends(ge
     tenant_code = principal.scope_tenant(request.tenant_code or settings.default_tenant)
     app_id = request.app_id or uuid.uuid4().hex
     api_key = request.api_key or uuid.uuid4().hex
-    row = services.create_app(
-        tenant_code=tenant_code,
-        app_id=app_id,
-        api_key=api_key,
-        app_name=request.app_name,
-        app_type=request.app_type,
-        icon=request.icon,
-        opening_statement=request.opening_statement,
-        suggested_questions=request.suggested_questions,
-        app_info=request.app_info,
-    )
+    try:
+        row = services.create_app(
+            tenant_code=tenant_code,
+            app_id=app_id,
+            api_key=api_key,
+            app_name=request.app_name,
+            app_type=request.app_type,
+            icon=request.icon,
+            opening_statement=request.opening_statement,
+            suggested_questions=request.suggested_questions,
+            app_info=request.app_info,
+        )
+    except services.AppIdConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     return {"data": _app_dict(row)}
 
 

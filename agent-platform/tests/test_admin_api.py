@@ -50,6 +50,35 @@ def test_update_and_delete_app(api_client):
     assert api_client.delete(f"/admin/apps/{created['uuid']}").status_code == 404
 
 
+def test_create_app_conflicts_on_active_app_id(api_client):
+    _create_app(api_client)
+    response = api_client.post(
+        "/admin/apps", json={"tenant_code": "t", "app_id": "app-1", "api_key": "key-2", "app_name": "dup"}
+    )
+    assert response.status_code == 409
+    assert "app-1" in response.json()["detail"]
+
+
+def test_recreate_after_delete_revives_same_app(api_client):
+    created = _create_app(api_client)
+    assert api_client.delete(f"/admin/apps/{created['uuid']}").status_code == 200
+
+    revived = _create_app(api_client, api_key="key-2", app_name="重建")
+    assert revived["uuid"] == created["uuid"]
+    assert revived["is_deleted"] == 0
+    assert revived["api_key"] == "key-2" and revived["app_name"] == "重建"
+    rows = api_client.get("/admin/apps", params={"tenant_code": "t"}).json()["data"]
+    assert [row["uuid"] for row in rows] == [created["uuid"]]
+
+
+def test_recreate_after_delete_rejected_for_other_tenant(api_client):
+    created = _create_app(api_client)
+    api_client.delete(f"/admin/apps/{created['uuid']}")
+    response = api_client.post("/admin/apps", json={"tenant_code": "other", "app_id": "app-1", "api_key": "key-2"})
+    assert response.status_code == 409
+    assert "租户" in response.json()["detail"]
+
+
 # --------------------------------------------------------------------------- 图草稿 / 发布 / 回滚
 
 

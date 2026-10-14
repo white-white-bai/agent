@@ -256,6 +256,14 @@
 - [x] 缺陷修复：`NodeInspector` / `RowsEditor` 克隆前先 `toRaw` —— `structuredClone` 不接受 Vue 响应式代理，选中节点或增删行时必抛 `DataCloneError`
 - [x] 测试：`tests/` 10 个文件 150 项全绿（client/api/nodeMeta/mapper/guard/chart/useTable/auth 纯逻辑单测 + 组件挂载 + 各视图冒烟）；`npm run lint` 无告警，`npm run build` 通过。X6 画布与图编辑器依赖真实画布与路由参数，不做挂载测试，其可测逻辑已下沉至 `mapper.js`
 
+**M3 续批（2026-10-14）· 应用注册表缺陷修复**：`app_id` 软删除后唯一键仍占用，重复注册触发未捕获
+`IntegrityError` 直接 500，已修复。
+
+- [x] 复活：`api/services.create_app` 命中同租户软删除记录时原位复活（置 `is_deleted=0` 并按入参覆盖字段，
+  `uuid` 沿用，既有图与会话记录一并恢复）；`ap_app` 唯一键语义不变，无需改 DDL
+- [x] 冲突：同 `app_id` 在用中，或软删除记录属其他租户时抛 `AppIdConflictError`，`POST /admin/apps` 映射为 409
+- [x] 测试：`tests/test_admin_api.py` 增 3 项（在用冲突 409 / 删除后复活且沿用 uuid 并回到列表 / 跨租户拒绝 409）
+
 **未纳入本批**：无（决策清单的 M1～M4 各项均已交付）。
 
 **环境备注**：本机 Python 3.11.1；依赖已 `pip install -e ".[dev]"`；测试用临时 SQLite（`conftest.py`），生产用 MySQL（`sql/ddl.sql` 人工执行）。

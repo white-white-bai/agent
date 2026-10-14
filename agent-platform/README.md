@@ -49,7 +49,8 @@ agent-platform/
 
 **管理接口**（`api/admin.py`，前缀 `/admin`）
 
-- 应用：`GET|POST /apps`、`GET|PUT|DELETE /apps/{uuid}`。
+- 应用：`GET|POST /apps`、`GET|PUT|DELETE /apps/{uuid}`。删除为软删除；`app_id` 全局唯一，再次注册同 `app_id` 会
+  原位复活该应用（沿用原 `uuid`，既有图与会话记录一并恢复），同 `app_id` 在用或属其他租户时返回 409。
 - 图：`GET /apps/{uuid}/graph`、`PUT /apps/{uuid}/graph/draft`、`POST /apps/{uuid}/graph/publish`、
   `GET /apps/{uuid}/graph/versions`、`POST /apps/{uuid}/graph/rollback`、`POST /apps/{uuid}/graph/import`
   （Dify DSL 导入，见下；运行态只跑已发布版本）。
