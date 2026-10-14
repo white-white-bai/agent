@@ -19,6 +19,7 @@ from agent_platform.api.deps import (
 )
 from agent_platform.api.schemas import ChatMessagesRequest
 from agent_platform.core import accounts as accounts_core
+from agent_platform.core import metrics
 from agent_platform.core.concurrency import ConcurrencyLimiter
 from agent_platform.core.config import get_settings
 from agent_platform.core.db import init_db
@@ -155,6 +156,9 @@ async def _chat_stream(
                     answer = item.get("answer") or answer
                     resources = (item.get("state", {}).get("variables", {}) or {}).get("chunks", []) or []
         except Exception as exc:  # noqa: BLE001
+            metrics.record_error(
+                tenant_code=app_record.tenant_code, app_uuid=app_record.uuid, detail=str(exc)
+            )
             yield compat.sse(compat.error_event(str(exc)))
             return
         finally:

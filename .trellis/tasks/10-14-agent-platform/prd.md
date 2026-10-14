@@ -113,7 +113,7 @@
 
 ### M3 管理与观测
 - [ ] **独立中台前端**：agent 列表、图编辑器（AntV X6）、模型/工具(MCP)/知识库/provider 配置、账号/角色、护栏配置。
-- [ ] **监控看板**：会话量/满意度/token/错误率（中台 MySQL + Langfuse 汇总）。
+- [x] **监控看板**：会话量/满意度/token/错误率（中台 MySQL + Langfuse 汇总）。
 - [x] **Langfuse 自托管**集成：节点级 trace 上报。
 - [x] **独立账号体系（后端）**：种子管理员 + 自管理角色/权限；租户维度隔离。见「M3 续批（2026-10-14）· 账号」。
 
@@ -220,7 +220,18 @@
 - [x] 依赖：`pyproject.toml` 增 `pyyaml>=6.0`（DSL 支持 YAML）
 - [x] 测试：`tests/test_importer.py` 28 项 + `tests/test_admin_api.py` 导入 4 项（节点/边映射、模板与裸表达式改写、条件分支与句柄、工具参数、降级重连、坏 DSL 拒绝、JSON/YAML 解析、导入接口契约），`ruff check` 通过
 
-**未纳入本批**：M3 的独立中台前端（含账号/角色页面）与监控看板；记忆的「可选摘要」。
+**M3 续批（2026-10-14）· 监控看板**：中台自有表的看板汇总已完成并覆盖测试。
+
+- [x] 模型与建表：`domain/models.py` 增 `MetricEvent`；`sql/ddl.sql` 增 `ap_metric_event`（幂等 DDL，人工执行）
+- [x] 汇总：`core/metrics.py`（`overview`：会话量 / 消息量（user/assistant）/ 满意度（like/dislike/rate）/ token / 错误率，
+  按天零填充序列；`record_error` 旁路写入错误事件，失败不阻断主流程）
+- [x] 埋点：`api/main.py` 对话链路 `except` 分支落一条 `kind=error`（不落 assistant 消息，既有兼容输出与分页不变）
+- [x] 管理端：`GET /admin/metrics/overview?tenant_code=&app_uuid=&days=`（权限点 `metrics:read`，租户由 `scope_tenant` 收口，
+  `days` 取 1..90）；内置 `editor` / `viewer` 角色补 `metrics:read`，`seed()` 对既有内置角色做权限补齐（仍幂等）
+- [x] 测试：`tests/test_metrics.py` 11 项（空态零填充、聚合与比率、天数窗口收敛、租户/应用收口、错误事件落库与截断、
+  存储失败吞掉、接口 Envelope/401/租户隔离、链路异常埋点端到端），`ruff check` 通过
+
+**未纳入本批**：M3 的独立中台前端（含账号/角色页面与看图表的页面）；记忆的「可选摘要」。
 
 **环境备注**：本机 Python 3.11.1；依赖已 `pip install -e ".[dev]"`；测试用临时 SQLite（`conftest.py`），生产用 MySQL（`sql/ddl.sql` 人工执行）。
 

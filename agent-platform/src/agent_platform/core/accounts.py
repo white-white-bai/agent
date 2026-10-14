@@ -33,12 +33,14 @@ BUILTIN_ROLES: dict[str, dict[str, object]] = {
             "guard:read", "guard:write",
             "mcp:read", "mcp:write",
             "knowledge:read", "knowledge:write",
+            "metrics:read",
         ],
     },
     "viewer": {
         "name": "只读",
         "permissions": [
             "app:read", "graph:read", "guard:read", "mcp:read", "knowledge:read", "user:read", "role:read",
+            "metrics:read",
         ],
     },
 }
@@ -251,10 +253,17 @@ def seed() -> bool:
     created = False
     with session_scope() as session:
         for code, spec in BUILTIN_ROLES.items():
-            if session.query(AdminRole).filter(AdminRole.code == code).first() is None:
+            row = session.query(AdminRole).filter(AdminRole.code == code).first()
+            if row is None:
                 session.add(
                     AdminRole(code=code, name=str(spec["name"]), permissions=list(spec["permissions"]), is_builtin=1)
                 )
+                created = True
+                continue
+            current = list(row.permissions or [])
+            merged = current + [item for item in spec["permissions"] if item not in current]
+            if merged != current:
+                row.permissions = merged
                 created = True
         if session.query(AdminUser).filter(AdminUser.username == settings.admin_seed_username).first() is None:
             password_hash, salt = hash_password(settings.admin_seed_password)

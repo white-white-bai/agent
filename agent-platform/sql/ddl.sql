@@ -202,3 +202,14 @@ CREATE TABLE IF NOT EXISTS ap_admin_user (
     KEY idx_ap_admin_user_role (role_code),
     KEY idx_ap_admin_user_tenant (tenant_code)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '中台管理端账号';
+
+CREATE TABLE IF NOT EXISTS ap_metric_event (
+    id          BIGINT       NOT NULL AUTO_INCREMENT,
+    tenant_code VARCHAR(64)  NOT NULL DEFAULT '',
+    app_uuid    VARCHAR(64)  NOT NULL DEFAULT '',
+    kind        VARCHAR(32)  NOT NULL DEFAULT 'error',
+    detail      VARCHAR(512) NOT NULL DEFAULT '',
+    created_at  DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    KEY idx_ap_metric_event_scope (tenant_code, app_uuid, kind, created_at)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '中台指标事件（错误率等，监控看板汇总用）';

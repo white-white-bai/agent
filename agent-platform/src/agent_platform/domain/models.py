@@ -199,3 +199,14 @@ class AdminUser(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class MetricEvent(Base):
+    __tablename__ = "ap_metric_event"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_code: Mapped[str] = mapped_column(String(64), index=True, default="")
+    app_uuid: Mapped[str] = mapped_column(String(64), index=True, default="")
+    kind: Mapped[str] = mapped_column(String(32), index=True, default="error")
+    detail: Mapped[str] = mapped_column(String(512), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)

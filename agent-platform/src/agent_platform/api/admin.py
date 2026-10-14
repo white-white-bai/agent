@@ -19,6 +19,7 @@ from agent_platform.api.schemas import (
     McpServerCreateRequest,
     SensitiveWordCreateRequest,
 )
+from agent_platform.core import metrics
 from agent_platform.core.accounts import AdminPrincipal
 from agent_platform.core.config import get_settings
 from agent_platform.importer import DifyImportError, convert, parse_dsl
@@ -299,3 +300,15 @@ def delete_document_endpoint(document_uuid: str) -> dict[str, Any]:
     if not delete_document(document_uuid):
         raise HTTPException(status_code=404, detail="文档不存在")
     return {"data": {"uuid": document_uuid, "is_deleted": 1}}
+
+
+# --------------------------------------------------------------------------- 监控看板
+
+@router.get("/metrics/overview", dependencies=[Depends(require_permission("metrics:read"))])
+def metrics_overview(
+    tenant_code: str = "",
+    app_uuid: str = "",
+    days: int = 7,
+    principal: AdminPrincipal = Depends(get_current_admin),
+) -> dict[str, Any]:
+    return {"data": metrics.overview(tenant_code=principal.scope_tenant(tenant_code), app_uuid=app_uuid, days=days)}

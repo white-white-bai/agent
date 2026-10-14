@@ -20,7 +20,7 @@ agent-platform/
 ├── .env.example
 ├── sql/                     # 建表 / 迁移脚本（人工执行，仓库无 DDL 目录）
 ├── src/agent_platform/
-│   ├── core/                # 配置、DB、Redis、日志、账号（角色/权限/口令）
+│   ├── core/                # 配置、DB、Redis、日志、账号（角色/权限/口令）、监控汇总
 │   ├── domain/              # ORM 模型（应用/租户/图/会话/护栏）
 │   ├── graph/               # 图定义 schema（pydantic）
 │   ├── importer/            # Dify DSL → 中台图定义（导入器 + CLI）
@@ -55,6 +55,7 @@ agent-platform/
   （Dify DSL 导入，见下；运行态只跑已发布版本）。
 - 配置：`/sensitive-words`、`/mcp-servers`、`/documents`（内置向量库）。
 - 账号：`POST /login`（免鉴权）、`GET /me`、`/users`、`/roles`（见下）。
+- 看板：`GET /metrics/overview`（见下）。
 
 健康检查：`GET /healthz`。
 
@@ -129,7 +130,7 @@ python -m agent_platform.worker.main
 - **口令**：PBKDF2-HMAC-SHA256（20 万轮）+ 每账号随机 16 字节盐，单向存储；SM4 可逆，不用于口令。
 - **令牌**：复用兼容层 JWT 签名，额外带 `typ=admin` 与角色/租户声明。云智 `client_credentials` 令牌与
   管理端令牌互不冒充：前者过不了 `/admin` 的 `typ` 校验，后者在兼容链路查不到 app `api_key`。
-- **角色**：内置 `admin`（`*`）、`editor`（读写应用/图/护栏/MCP/知识库）、`viewer`（只读），可自建 / 删除自建角色，
+- **角色**：内置 `admin`（`*`）、`editor`（读写应用/图/护栏/MCP/知识库 + 看板只读）、`viewer`（只读，含看板），可自建 / 删除自建角色，
   内置角色不可删。权限点形如 `app:read`、`graph:write`，路由级 `require_permission(...)` 校验。
 - **租户隔离**：账号绑定 `tenant_code` 后，列表/新增接口只能看到与写入本租户数据（`scope_tenant`）；
   未绑定（空）表示全局，与改造前一致。
@@ -142,6 +143,28 @@ curl localhost:8900/admin/apps -H "Authorization: Bearer <token>"
 
 种子账号名/口令与令牌有效期由 `AP_ADMIN_SEED_USERNAME`、`AP_ADMIN_SEED_PASSWORD`、`AP_ADMIN_TOKEN_TTL_SECONDS`
 配置；**上线前必须改掉默认口令**。
+
+## 监控看板
+
+`GET /admin/metrics/overview?tenant_code=&app_uuid=&days=7`（权限点 `metrics:read`；`days` 取 1..90，`0` 视为缺省 7）。
+数据全部取自中台自有表，不依赖 Langfuse（未配置时其已降级 no-op）：
+
+```json
+{"data": {
+  "range": {"days": 7, "start": "2026-10-08", "end": "2026-10-14"},
+  "conversations": {"total": 12, "series": [{"date": "2026-10-08", "count": 1}, ...]},
+  "messages": {"total": 40, "user": 20, "assistant": 20},
+  "satisfaction": {"like": 3, "dislike": 1, "rate": 0.75},
+  "tokens": {"total": 1200, "series": [...]},
+  "errors": {"total": 2, "rate": 0.1, "series": [...]}
+}}
+```
+
+- 会话量 / 每分钟消息 / token 取自 `ap_conversation`、`ap_message`；满意度取 `ap_message.feedback`（`like`/`dislike`），
+  `rate = like / (like + dislike)`；错误率 `rate = 错误数 / 用户提问轮数`。
+- 错误事件写在 `ap_metric_event`：对话链路抛异常时由 `core/metrics.record_error` 落一条 `kind=error`（旁路写入，
+  失败不影响主流程），不落 assistant 消息，故不影响会话/消息分页等既有兼容输出。
+- 序列按天零填充（缺数据的日期补 0），可直接画图；租户维度由账号 `scope_tenant` 收口。
 
 ## 观测
 
