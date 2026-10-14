@@ -13,6 +13,7 @@ class ChatMessagesRequest(BaseModel):
     conversation_id: str = ""
     response_mode: str = "streaming"
     files: list[dict[str, Any]] = Field(default_factory=list)
+    idempotency_key: str = ""
 
 
 class OpeningInfo(BaseModel):

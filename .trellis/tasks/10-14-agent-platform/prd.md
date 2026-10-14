@@ -107,7 +107,9 @@
 - [x] **SSE 出口适配器**：事件与字段严格对齐前端解析器（`LogTitleMarker` / `trimMessageEndMetadata` 语义不变）。
 - [x] **应用注册表 + 迁移脚本**：导入存量 `ai_monitor_app`（`app_id`/`api_key` 沿用）。
 - [x] **护栏**：敏感词/额度/频率/轮数/默认回复（先上不启用，双跑）。
-- [ ] **限流/幂等**：按 app/tenant/用户 —— 限流已随护栏实现（`AP_GUARD_RATE_ENABLED`，默认关闭）；幂等键与并发上限已预留配置（`AP_IDEMPOTENCY_TTL_SECONDS` / `AP_MAX_CONCURRENCY_PER_APP`）但**未接线**。
+- [x] **限流/幂等**：按 app/tenant/用户 —— 限流已随护栏实现（`AP_GUARD_RATE_ENABLED`，默认关闭）；幂等键
+  （`AP_IDEMPOTENCY_TTL_SECONDS`，默认只在显式传键时生效）与 per-app 并发上限（`AP_MAX_CONCURRENCY_PER_APP`，
+  可配排队 `AP_CONCURRENCY_WAIT_SECONDS`）已接线，均默认关闭，行为与改造前一致。
 
 ### M3 管理与观测
 - [ ] **独立中台前端**：agent 列表、图编辑器（AntV X6）、模型/工具(MCP)/知识库/provider 配置、账号/角色、护栏配置。
@@ -189,7 +191,16 @@
 - [x] 记忆窗口：`core/config.py`（`AP_HISTORY_WINDOW`）+ `api/services.py`（`load_history`）+ `api/main.py`（`history` 变量注入图输入；默认 0 时不注入，行为与改造前逐字节一致）
 - [x] 测试：`tests/` 199 项全绿（schema/expr/engine/nodes/condition/checkpointer/api/admin/compat/knowledge/mcp/worker/observability/guards/crypto/security），`ruff check` 通过
 
-**未纳入本批**：M3 的独立中台前端与监控看板、独立账号体系（角色/权限管理端），M4 的 Dify 导入器；记忆的「可选摘要」；`AP_IDEMPOTENCY_TTL_SECONDS` / `AP_MAX_CONCURRENCY_PER_APP` 已预留配置但未接线。
+**M2 续批（2026-10-14）**：以下已完成并覆盖测试。
+
+- [x] 幂等键：`core/idempotency.py`（`Idempotency-Key` 头 / body `idempotency_key`，TTL 内命中复用首次结果且不重复落库；`AP_IDEMPOTENCY_DERIVE_KEY=false` 时不自行推导，避免同会话重复提问被误判为重放）
+- [x] 并发上限：`core/concurrency.py`（per-app 计数槽 + TTL 兜底 + 可选排队；`AP_MAX_CONCURRENCY_PER_APP<=0` 关闭）
+- [x] 接入：`api/main.py`（`/v1/chat-messages` 与 `/api/transfer/one/chat-messages` 共用入口：应用 → 图 → 幂等 → 并发 → 会话/历史 → 护栏 → 执行；槽位与幂等键在 `finally` 释放，覆盖流式异常与护栏拒绝）
+- [x] Redis 原语：`core/redis.py` 增 `set_if_absent` / `delete`（沿用既有降级封装）
+- [x] 内网冒烟：`scripts/smoke_e2e.py`（真 MySQL + 真云智网关 + 真实模型：建表 → 注册/复用应用 → 发布图 → 打原始 Dify 与云智两条链路 → 断言 SSE 事件序列与各 Envelope 形状，含工作流三重嵌套）
+- [x] 测试：`tests/test_idempotency.py`、`tests/test_concurrency.py` 共 23 项（单测 + API 契约），全套 222 项全绿，`ruff check` 通过
+
+**未纳入本批**：M3 的独立中台前端与监控看板、独立账号体系（角色/权限管理端），M4 的 Dify 导入器；记忆的「可选摘要」。
 
 **环境备注**：本机 Python 3.11.1；依赖已 `pip install -e ".[dev]"`；测试用临时 SQLite（`conftest.py`），生产用 MySQL（`sql/ddl.sql` 人工执行）。
 

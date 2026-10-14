@@ -31,12 +31,12 @@ def get_redis() -> Any:
     return _client
 
 
-def incr_with_ttl(key: str, ttl_seconds: int) -> int:
+def incr_with_ttl(key: str, ttl_seconds: int, amount: int = 1) -> int:
     client = get_redis()
     if client is not None:
         try:
             pipe = client.pipeline()
-            pipe.incr(key)
+            pipe.incr(key, amount)
             pipe.expire(key, ttl_seconds)
             count, _ = pipe.execute()
             return int(count)
@@ -46,9 +46,35 @@ def incr_with_ttl(key: str, ttl_seconds: int) -> int:
     count, expires = _memory_counters.get(key, (0, now + ttl_seconds))
     if expires < now:
         count, expires = 0, now + ttl_seconds
-    count += 1
+    count += amount
     _memory_counters[key] = (count, expires)
     return count
+
+
+def set_if_absent(key: str, value: Any, ttl_seconds: int) -> bool:
+    """SET NX EX：写入成功返回 True，键已存在返回 False。"""
+    client = get_redis()
+    if client is not None:
+        try:
+            return bool(client.set(key, value, ex=ttl_seconds, nx=True))
+        except Exception:  # noqa: BLE001, S110
+            pass
+    entry = _memory_values.get(key)
+    if entry is not None and entry[1] >= time.time():
+        return False
+    _memory_values[key] = (value, time.time() + ttl_seconds)
+    return True
+
+
+def delete(key: str) -> None:
+    client = get_redis()
+    if client is not None:
+        try:
+            client.delete(key)
+            return
+        except Exception:  # noqa: BLE001, S110
+            pass
+    _memory_values.pop(key, None)
 
 
 def set_value(key: str, value: Any, ttl_seconds: int) -> None:

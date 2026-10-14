@@ -31,6 +31,7 @@ agent-platform/
 │   ├── observability/       # Langfuse 节点级 trace（未配置降级为 no-op）
 │   ├── worker/              # 异步任务（Redis 队列 + 任务处理器）
 │   └── api/                 # FastAPI + 兼容接口
+├── scripts/                 # 内网冒烟脚本
 └── tests/
 ```
 
@@ -82,6 +83,19 @@ python -m agent_platform.worker.main
 `AP_HISTORY_WINDOW` 控制注入图输入的历史消息条数（按会话取最近 N 条，倒序取正序注入 `history` 变量）；
 默认 `0` 表示关闭，此时图输入与改造前完全一致。摘要（summary）未实现。
 
+## 幂等与并发（默认关闭）
+
+`/v1/chat-messages` 与 `/api/transfer/one/chat-messages` 共用一条入口，支持幂等键与 per-app 并发上限，两者默认关闭、
+行为与改造前逐字节一致。
+
+- **幂等**：`AP_IDEMPOTENCY_TTL_SECONDS`（默认 600，`<=0` 关闭）。仅在调用方显式传 `Idempotency-Key` 头或 body
+  `idempotency_key` 时生效，命中则复用首次结果且不重复落库；置 `AP_IDEMPOTENCY_DERIVE_KEY=true` 后按
+  `app+user+conversation+query` 自行推导（同会话内正常重复提问会被判为重放，慎开）。
+- **并发**：`AP_MAX_CONCURRENCY_PER_APP`（默认 0 表示不限）。超限时按 `AP_CONCURRENCY_WAIT_SECONDS`（默认 0，立即拒绝）
+  轮询等空位，仍拿不到槽位则返回 `error` 事件；槽位带 TTL 兜底，进程异常退出不会永久占位。
+
+两者共用 Redis 计数/键值，Redis 不可用时降级为进程内存储（单实例语义）。
+
 ## 观测
 
 配置 `AP_LANGFUSE_HOST` / `AP_LANGFUSE_PUBLIC_KEY` / `AP_LANGFUSE_SECRET_KEY` 后按节点上报 trace；
@@ -97,3 +111,16 @@ cp .env.example .env
 pytest
 uvicorn agent_platform.api.main:app --reload --port 8900
 ```
+
+## 内网冒烟
+
+```bash
+python scripts/smoke_e2e.py                                    # 进程内 ASGI，读 .env，连真 MySQL / 云智 / 模型
+python scripts/smoke_e2e.py --base-url http://127.0.0.1:8900   # 打已部署实例
+python scripts/smoke_e2e.py --app-id smoke-e2e --api-key <存量 api_key>
+```
+
+建表 → 注册/复用应用 → 保存并发布图 → 依次打原始 Dify `/v1/chat-messages`、云智
+`/api/transfer/one/chat-messages` 两条链路，断言 SSE 事件序列与各 Envelope 形状（会话/消息分页、
+`listConversationDirect`、工作流三重嵌套），并按需校验幂等重放。固定 `app_id`（默认 `smoke-e2e`），每次运行新增一个
+图版本，**只应在开发/测试库执行**。不可用项以 `[skip]` 标出、失败以 `[FAIL]` 标出并返回非零退出码。

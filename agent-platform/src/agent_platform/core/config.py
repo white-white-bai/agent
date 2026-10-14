@@ -64,7 +64,9 @@ class Settings(BaseSettings):
 
     # 幂等 / 并发
     idempotency_ttl_seconds: int = 600
+    idempotency_derive_key: bool = False
     max_concurrency_per_app: int = 0
+    concurrency_wait_seconds: float = 0.0
 
 
 @lru_cache
