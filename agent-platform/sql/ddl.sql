@@ -140,3 +140,34 @@ CREATE TABLE IF NOT EXISTS ap_checkpoint_write (
     UNIQUE KEY uk_ap_checkpoint_write (thread_id, checkpoint_ns, checkpoint_id, task_id, idx),
     KEY idx_ap_checkpoint_write_thread (thread_id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'LangGraph checkpoint 待写通道';
+
+CREATE TABLE IF NOT EXISTS ap_document (
+    id          BIGINT       NOT NULL AUTO_INCREMENT,
+    uuid        VARCHAR(64)  NOT NULL,
+    tenant_code VARCHAR(64)  NOT NULL DEFAULT '',
+    dataset_id  VARCHAR(64)  NOT NULL DEFAULT '',
+    title       VARCHAR(255) NOT NULL DEFAULT '',
+    content     TEXT         NULL,
+    embedding   JSON         NULL,
+    metadata    JSON         NULL,
+    is_deleted  INT          NOT NULL DEFAULT 0,
+    created_at  DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_ap_document_uuid (uuid),
+    KEY idx_ap_document_dataset (tenant_code, dataset_id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '内置向量库文档';
+
+CREATE TABLE IF NOT EXISTS ap_mcp_server (
+    id          BIGINT       NOT NULL AUTO_INCREMENT,
+    uuid        VARCHAR(64)  NOT NULL,
+    tenant_code VARCHAR(64)  NOT NULL DEFAULT '',
+    name        VARCHAR(64)  NOT NULL,
+    kind        VARCHAR(16)  NOT NULL DEFAULT 'mcp',
+    url         VARCHAR(512) NOT NULL DEFAULT '',
+    headers     JSON         NULL,
+    is_deleted  INT          NOT NULL DEFAULT 0,
+    created_at  DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_ap_mcp_server_uuid (uuid),
+    KEY idx_ap_mcp_server_name (tenant_code, name)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'MCP Server 注册表';

@@ -8,12 +8,12 @@ services:
     depends_on:
       - langfuse
 
-  # 长任务 worker（M1 占位，异步任务实现后接入 Redis 队列）
+  # 长任务 worker（Redis 队列消费：知识入库 / 工作流批处理 / 报告生成）
   worker:
     build: .
     image: agent-platform:dev
     env_file: .env
-    command: ["python", "-c", "print('worker placeholder: 接入 Redis 队列后启用')"]
+    command: ["python", "-m", "agent_platform.worker.main"]
     depends_on:
       - langfuse
 

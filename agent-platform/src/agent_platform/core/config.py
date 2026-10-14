@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Any
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -33,6 +34,37 @@ class Settings(BaseSettings):
 
     sm4_key: str = ""
     sm4_iv: str = ""
+
+    # 工具服务注册表：{name: {"url": str, "kind": "http" | "mcp", "headers": {...}, "timeout": float}}
+    tool_servers: dict[str, dict[str, Any]] = {}
+
+    # 护栏（先上不启用：guard_enabled=False 时全部短路，双跑期与 Java 各持一份）
+    guard_enabled: bool = False
+    guard_sensitive_enabled: bool = False
+    guard_quota_enabled: bool = False
+    guard_rate_enabled: bool = False
+    guard_round_enabled: bool = False
+    guard_daily_token_quota: int = 0
+    guard_rate_per_minute: int = 0
+    guard_max_rounds: int = 0
+    guard_default_reply: str = ""
+
+    # 内置向量库
+    embedding_dim: int = 256
+    embedding_base_url: str = ""
+    embedding_api_key: str = ""
+    embedding_model: str = ""
+
+    # 兼容层鉴权：{client_id: client_secret}
+    oauth_clients: dict[str, str] = {}
+    jwt_secret: str = "agent-platform-dev-secret"
+
+    # 记忆：窗口条数（0 关闭，历史以 history 变量注入图输入）
+    history_window: int = 0
+
+    # 幂等 / 并发
+    idempotency_ttl_seconds: int = 600
+    max_concurrency_per_app: int = 0
 
 
 @lru_cache

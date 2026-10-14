@@ -127,6 +127,35 @@ class Checkpoint(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
+class Document(Base):
+    __tablename__ = "ap_document"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    tenant_code: Mapped[str] = mapped_column(String(64), index=True)
+    dataset_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    title: Mapped[str] = mapped_column(String(255), default="")
+    content: Mapped[str] = mapped_column(Text, default="")
+    embedding: Mapped[list] = mapped_column(JSON, default=list)
+    doc_metadata: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
+    is_deleted: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class McpServer(Base):
+    __tablename__ = "ap_mcp_server"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    tenant_code: Mapped[str] = mapped_column(String(64), index=True, default="")
+    name: Mapped[str] = mapped_column(String(64), index=True)
+    kind: Mapped[str] = mapped_column(String(16), default="mcp")
+    url: Mapped[str] = mapped_column(String(512), default="")
+    headers: Mapped[dict] = mapped_column(JSON, default=dict)
+    is_deleted: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
 class CheckpointWrite(Base):
     __tablename__ = "ap_checkpoint_write"
     __table_args__ = (

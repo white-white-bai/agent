@@ -28,9 +28,64 @@ agent-platform/
 │   ├── knowledge/           # 检索适配器（内置向量库 / 外接平台）
 │   ├── tools/               # MCP（内置 HTTP→MCP 桥 + MCP Client）
 │   ├── checkpoint/          # 自研 MySQL checkpointer
+│   ├── observability/       # Langfuse 节点级 trace（未配置降级为 no-op）
+│   ├── worker/              # 异步任务（Redis 队列 + 任务处理器）
 │   └── api/                 # FastAPI + 兼容接口
 └── tests/
 ```
+
+## 接口
+
+**兼容层**（Java/前端零改动，`api/main.py` + `api/compat_api.py`）
+
+- Dify `/v1`：`/v1/chat-messages`（SSE）、`/v1/conversations`、`/v1/messages`、`/v1/messages/{id}/feedbacks|suggested`、
+  `/v1/conversations/{id}/name`、`/v1/parameters`、`/v1/workflows/run`、`/v1/files/upload`。
+- 云智封装层：`/api/oauth2/token`、`/api/transfer/one/chat-messages`（含 `/conversations`、`/messages`、`/feedback`、
+  `/suggested`、`/stop`、`/rename`）、`/api/open/dify/*`（`difyApp`、`getDifyAppInfo`、`listConversationDirect`、
+  `listConversationMessageDirect`、`listConversationMessageFeedbacksDirect`、`listDifyEndUser`、`runWorkflow`、`parameters`）。
+- SSE 事件：`message` / `agent_message` / `message_end` / `error`；云智响应体为 `{code,msg,data}` 嵌套 Envelope。
+
+**管理接口**（`api/admin.py`，前缀 `/admin`）
+
+- 应用：`GET|POST /apps`、`GET|PUT|DELETE /apps/{uuid}`。
+- 图：`GET /apps/{uuid}/graph`、`PUT /apps/{uuid}/graph/draft`、`POST /apps/{uuid}/graph/publish`、
+  `GET /apps/{uuid}/graph/versions`、`POST /apps/{uuid}/graph/rollback`（运行态只跑已发布版本）。
+- 配置：`/sensitive-words`、`/mcp-servers`、`/documents`（内置向量库）。
+
+健康检查：`GET /healthz`。
+
+## 数据库与迁移
+
+```bash
+mysql -h host -P 3306 -u user -p agent_platform < sql/ddl.sql               # 建表（幂等）
+mysql -h host -P 3306 -u user -p agent_platform < sql/migrate_legacy_app.sql  # 存量 ai_monitor_app 导入
+```
+
+迁移脚本沿用现有 `app_id` / `api_key`，按区域分表逐个设置 `@tenant_code`，可重复执行。
+
+## 异步任务（worker）
+
+```bash
+python -m agent_platform.worker.main
+```
+
+任务类型：`knowledge_ingest`（知识入库）、`graph_batch_run`（工作流批处理）、`report_generate`（报告汇总）。
+队列走 Redis（`AP_REDIS_URL`），队列键 `ap:jobs`；Redis 不可用时降级为进程内队列。
+
+## 护栏（先上不启用）
+
+`AP_GUARD_ENABLED=false` 时整条护栏链短路，行为与现状一致；下线后按 `AP_GUARD_*` 逐项开启敏感词/额度/频率/轮数，
+默认回复由 `AP_GUARD_DEFAULT_REPLY` 配置。双跑期 Java 侧护栏不动。
+
+## 记忆
+
+`AP_HISTORY_WINDOW` 控制注入图输入的历史消息条数（按会话取最近 N 条，倒序取正序注入 `history` 变量）；
+默认 `0` 表示关闭，此时图输入与改造前完全一致。摘要（summary）未实现。
+
+## 观测
+
+配置 `AP_LANGFUSE_HOST` / `AP_LANGFUSE_PUBLIC_KEY` / `AP_LANGFUSE_SECRET_KEY` 后按节点上报 trace；
+未配置或 Langfuse 不可用时自动降级为 no-op，不阻断执行。
 
 ## 本地运行
 

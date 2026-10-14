@@ -8,6 +8,7 @@ import httpx
 from agent_platform.core.config import Settings
 from agent_platform.engine.context import Retriever
 from agent_platform.graph.schema import KnowledgeConfig
+from agent_platform.knowledge.vector_store import build_builtin_searcher
 
 
 async def _http_retrieve(
@@ -33,9 +34,17 @@ async def _http_retrieve(
 
 
 def build_retriever(settings: Settings) -> Retriever:
-    async def retrieve(config: KnowledgeConfig, query: str) -> list[dict[str, Any]]:
+    builtin_search = build_builtin_searcher(settings)
+
+    async def retrieve(config: KnowledgeConfig, query: str, tenant_code: str = "") -> list[dict[str, Any]]:
         if config.retriever == "builtin":
-            return []
+            return await builtin_search(
+                tenant_code=tenant_code,
+                query=query,
+                dataset_ids=config.dataset_ids,
+                top_k=config.top_k,
+                score_threshold=config.score_threshold,
+            )
         if config.retriever == "light_rag":
             return await _http_retrieve(
                 settings.light_rag_base_url, settings.light_rag_api_key, query, config.top_k, config.dataset_ids

@@ -53,7 +53,7 @@ async def run_llm(node: NodeDef, state: GraphState, ctx: EngineContext) -> Graph
 async def run_knowledge(node: NodeDef, state: GraphState, ctx: EngineContext) -> GraphState:
     config: KnowledgeConfig = node.typed_config()
     variables = _variables(state)
-    chunks = await ctx.retriever(config, render(config.query, variables))
+    chunks = await ctx.retriever(config, render(config.query, variables), ctx.tenant_code)
     return _store(state, variables, node.id, config.output_var, chunks)
 
 
@@ -80,7 +80,7 @@ def run_code_node(node: NodeDef, state: GraphState, ctx: EngineContext) -> Graph
 async def run_tool(node: NodeDef, state: GraphState, ctx: EngineContext) -> GraphState:
     config: ToolConfig = node.typed_config()
     variables = _variables(state)
-    result = await ctx.tools(config, variables)
+    result = await ctx.tools(config, variables, ctx.tenant_code)
     return _store(state, variables, node.id, config.output_var, result)
 
 

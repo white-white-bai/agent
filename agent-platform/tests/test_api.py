@@ -1,11 +1,15 @@
+import re
 import uuid
 
 import pytest
 from fastapi.testclient import TestClient
 
+from agent_platform.api import main as main_mod
+from agent_platform.api import services
 from agent_platform.api.main import app, get_engine_context
+from agent_platform.core.config import Settings
 from agent_platform.core.db import session_scope
-from agent_platform.domain.models import App, Graph, GraphVersion
+from agent_platform.domain.models import App, Conversation, Graph, GraphVersion
 from agent_platform.graph.schema import GraphDef
 
 GRAPH_DEF = GraphDef.model_validate(
@@ -65,3 +69,61 @@ def test_unknown_api_key_returns_default_reply(client):
     response = client.post("/v1/chat-messages", json={"query": "hi"}, headers={"Api-Key": "unknown"})
     assert "message_end" in response.text
     assert "智能客服" in response.text
+
+
+def _seed_conversation() -> Conversation:
+    with session_scope() as session:
+        row = Conversation(
+            uuid=uuid.uuid4().hex, tenant_code="t", app_uuid="app-uuid", conversation_id=uuid.uuid4().hex
+        )
+        session.add(row)
+        session.flush()
+        return row
+
+
+def test_load_history_is_empty_when_window_disabled():
+    conversation = _seed_conversation()
+    services.save_message(conversation, "user", query="q1")
+    assert services.load_history(conversation, 0) == []
+    assert services.load_history(conversation, -1) == []
+
+
+def test_load_history_returns_trailing_window_in_chronological_order():
+    conversation = _seed_conversation()
+    services.save_message(conversation, "user", query="q1")
+    services.save_message(conversation, "assistant", query="q1", answer="a1")
+    services.save_message(conversation, "user", query="q2")
+    services.save_message(conversation, "assistant", query="q2", answer="a2")
+
+    assert services.load_history(conversation, 3) == [
+        {"role": "assistant", "content": "a1"},
+        {"role": "user", "content": "q2"},
+        {"role": "assistant", "content": "a2"},
+    ]
+    assert len(services.load_history(conversation, 10)) == 4
+
+
+def test_chat_injects_history_window_into_graph_inputs(client, monkeypatch):
+    monkeypatch.setattr(main_mod, "get_settings", lambda: Settings(history_window=4))
+    seen: list[dict] = []
+
+    async def fake_stream(graph_def, inputs, ctx, checkpointer=None, thread_id=None):
+        seen.append(dict(inputs))
+        yield {"type": "final", "answer": "回答", "state": {"variables": {}}}
+
+    monkeypatch.setattr(main_mod, "stream_graph", fake_stream)
+
+    first = client.post("/v1/chat-messages", json={"query": "第一问"}, headers={"Api-Key": "key-1"})
+    assert "history" not in seen[0]
+    conversation_id = re.search(r'"conversation_id": "([0-9a-f]+)"', first.text).group(1)
+
+    client.post(
+        "/v1/chat-messages",
+        json={"query": "第二问", "conversation_id": conversation_id},
+        headers={"Api-Key": "key-1"},
+    )
+    assert seen[1]["history"] == [
+        {"role": "user", "content": "第一问"},
+        {"role": "assistant", "content": "回答"},
+    ]
+    assert seen[1]["query"] == "第二问"

@@ -92,27 +92,27 @@
 ## Requirements（按里程碑）
 
 ### M1 引擎优先（首个里程碑交付）
-- [ ] 仓库内新增中台顶层目录骨架（Python 服务 + 配置 + 迁移脚本目录）。
-- [ ] 图 schema（JSON document）定义 + **草稿/发布版本**存储（中台 MySQL 新表）。
-- [ ] **核心节点集**执行器：start/end、LLM、知识检索、条件分支、代码（沙箱）、HTTP/MCP 工具、变量聚合、回答。
-- [ ] **LangGraph 执行器**：`astream_events` 流式 + **自研 MySQL checkpointer**（断点续跑/human-in-loop 基础）。
-- [ ] **变量/表达式系统**：inputs schema + 变量引用 + 表达式引擎（Jinja2/JMESPath）。
-- [ ] **模型适配器**：云智「通用大模型调用器」自定义 ChatModel + OpenAI 兼容私有 provider。
-- [ ] **知识适配器**：内置向量库 Retriever + 外接（知流/LightRAG/知识图谱）Retriever。
-- [ ] **MCP**：内置 HTTP→MCP 桥（托管 MCP Server）+ MCP Client 接入。
-- [ ] **记忆**：窗口 + 可选摘要。
+- [x] 仓库内新增中台顶层目录骨架（Python 服务 + 配置 + 迁移脚本目录）。
+- [x] 图 schema（JSON document）定义 + **草稿/发布版本**存储（中台 MySQL 新表）。
+- [x] **核心节点集**执行器：start/end、LLM、知识检索、条件分支、代码（沙箱）、HTTP/MCP 工具、变量聚合、回答。
+- [x] **LangGraph 执行器**：`astream_events` 流式 + **自研 MySQL checkpointer**（断点续跑/human-in-loop 基础）。
+- [x] **变量/表达式系统**：inputs schema + 变量引用 + 表达式引擎（Jinja2/JMESPath）。
+- [x] **模型适配器**：云智「通用大模型调用器」自定义 ChatModel + OpenAI 兼容私有 provider。
+- [x] **知识适配器**：内置向量库 Retriever + 外接（知流/LightRAG/知识图谱）Retriever。
+- [x] **MCP**：内置 HTTP→MCP 桥（托管 MCP Server）+ MCP Client 接入。
+- [x] **记忆**：窗口已实现（`AP_HISTORY_WINDOW`，历史以 `history` 变量注入图输入）；**可选摘要**未实现（本条原文标注「可选」）。
 
 ### M2 兼容与集成
-- [ ] **两层兼容接口**：云智封装层（`/api/oauth2/token`、`/api/transfer/one/*`、`/api/open/dify/*`）+ 原始 Dify `/v1/*`。
-- [ ] **SSE 出口适配器**：事件与字段严格对齐前端解析器（`LogTitleMarker` / `trimMessageEndMetadata` 语义不变）。
-- [ ] **应用注册表 + 迁移脚本**：导入存量 `ai_monitor_app`（`app_id`/`api_key` 沿用）。
-- [ ] **护栏**：敏感词/额度/频率/轮数/默认回复（先上不启用，双跑）。
-- [ ] **限流/幂等**：按 app/tenant/用户。
+- [x] **两层兼容接口**：云智封装层（`/api/oauth2/token`、`/api/transfer/one/*`、`/api/open/dify/*`）+ 原始 Dify `/v1/*`。
+- [x] **SSE 出口适配器**：事件与字段严格对齐前端解析器（`LogTitleMarker` / `trimMessageEndMetadata` 语义不变）。
+- [x] **应用注册表 + 迁移脚本**：导入存量 `ai_monitor_app`（`app_id`/`api_key` 沿用）。
+- [x] **护栏**：敏感词/额度/频率/轮数/默认回复（先上不启用，双跑）。
+- [ ] **限流/幂等**：按 app/tenant/用户 —— 限流已随护栏实现（`AP_GUARD_RATE_ENABLED`，默认关闭）；幂等键与并发上限已预留配置（`AP_IDEMPOTENCY_TTL_SECONDS` / `AP_MAX_CONCURRENCY_PER_APP`）但**未接线**。
 
 ### M3 管理与观测
 - [ ] **独立中台前端**：agent 列表、图编辑器（AntV X6）、模型/工具(MCP)/知识库/provider 配置、账号/角色、护栏配置。
 - [ ] **监控看板**：会话量/满意度/token/错误率（中台 MySQL + Langfuse 汇总）。
-- [ ] **Langfuse 自托管**集成：节点级 trace 上报。
+- [x] **Langfuse 自托管**集成：节点级 trace 上报。
 - [ ] **独立账号体系**：种子管理员 + 自管理角色/权限；租户维度隔离。
 
 ### M4 迁移工具（后续）
@@ -120,18 +120,18 @@
 
 ## Acceptance Criteria
 
-- [ ] Java 后端仅改 base-url/鉴权即可把对话链路指向中台，前端零改动。
-- [ ] 兼容接口的响应 Envelope（如 `data.data.data.outputs`、`data.records` 分页）与云智一致。
-- [ ] SSE 事件序列与字段使现有前端解析器无回归。
-- [ ] 引擎能执行一个含 LLM + 知识检索 + 条件分支 + MCP 工具的图，并支持流式输出与 checkpoint 恢复。
-- [ ] 单实例多租户下，配置与运行数据按 `tenant_id` 正确隔离。
+- [x] Java 后端仅改 base-url/鉴权即可把对话链路指向中台，前端零改动（兼容接口与其契约回归测试已就位；Java 源码按 Out of Scope 不动）。
+- [x] 兼容接口的响应 Envelope（如 `data.data.data.outputs`、`data.records` 分页）与云智一致。
+- [x] SSE 事件序列与字段使现有前端解析器无回归。
+- [x] 引擎能执行一个含 LLM + 知识检索 + 条件分支 + MCP 工具的图，并支持流式输出与 checkpoint 恢复。
+- [x] 单实例多租户下，配置与运行数据按 `tenant_id` 正确隔离。
 
 ## Definition of Done（团队质量基线）
 
-- [ ] M1 引擎单测与节点集成测试通过（mock LLM/MCP/检索）。
-- [ ] 兼容接口的契约回归测试通过（SSE 事件 + Envelope）。
-- [ ] 逻辑复查：跨层数据流（图配置 → 执行器 → checkpointer/消息表 → 兼容接口出口）一致。
-- [ ] 交付物含建表/迁移脚本（仓库无 DDL 目录时随任务交付，人工执行）。
+- [x] M1 引擎单测与节点集成测试通过（mock LLM/MCP/检索）。
+- [x] 兼容接口的契约回归测试通过（SSE 事件 + Envelope）。
+- [x] 逻辑复查：跨层数据流（图配置 → 执行器 → checkpointer/消息表 → 兼容接口出口）一致。
+- [x] 交付物含建表/迁移脚本（仓库无 DDL 目录时随任务交付，人工执行）。
 
 ## Out of Scope（显式）
 
@@ -176,7 +176,20 @@
 - [x] 兼容出口：`api/compat.py`（SSE `data:` 事件：message / message_end / error）+ `api/main.py`（`/v1/chat-messages` 与 `/api/transfer/one/chat-messages` 别名、`/healthz`）
 - [x] 测试：`tests/`（schema、expr、engine、condition、checkpointer、api 共 18 项，全绿；`ruff check` 通过）
 
-**M1 待续**（下一批）：应用/图管理 API（草稿保存/发布/回滚）、会话与消息兼容查询接口、护栏（敏感词/额度/频率，先上不启用）、MCP Client 接入外部真 MCP Server、Langfuse 埋点、内置向量库、worker 异步任务。
+**M1 续批（2026-10-14）**：以下已完成并覆盖测试。
+
+- [x] 管理与图 API：`api/admin.py`（应用 CRUD；图草稿保存 `PUT /graph/draft`、发布 `POST /graph/publish`、版本列表、回滚 `POST /graph/rollback`；`/sensitive-words`、`/mcp-servers`、`/documents` 配置接口）
+- [x] 会话与消息兼容查询接口：`api/compat_api.py`（云智 `/api/transfer/one/chat-messages/conversations|messages|feedback|suggested|stop|rename` + `/api/open/dify/*` 全量；原始 Dify `/v1/conversations`、`/v1/messages`、`/v1/parameters`、`/v1/workflows/run`、`/v1/files/upload`）
+- [x] 护栏：`core/guards.py`（敏感词 / 额度 / 频率 / 轮数 / 默认回复，`AP_GUARD_ENABLED=false` 全链路短路，先上不启用）
+- [x] MCP Client：`tools/mcp_client.py`（Streamable HTTP + JSON-RPC 2.0、`Mcp-Session-Id` 会话、SSE `data:` 解析）+ `tools/mcp_bridge.py` 接入外部真 MCP Server（配置 `AP_TOOL_SERVERS` 或库表 `ap_mcp_server`）
+- [x] Langfuse 埋点：`observability/langfuse.py`（节点级 trace；未配置/异常时降级 no-op，不阻断执行）
+- [x] 内置向量库：`knowledge/embeddings.py` + `knowledge/vector_store.py`（哈希嵌入默认，可配远程 embedding；`ap_document` 增删查 + 余弦检索）
+- [x] worker 异步任务：`worker/`（Redis 队列 `ap:jobs`，进程内降级；任务 `knowledge_ingest` / `graph_batch_run` / `report_generate`；入口 `python -m agent_platform.worker.main`）
+- [x] 迁移脚本：`sql/ddl.sql` + `sql/migrate_legacy_app.sql`（存量 `ai_monitor_app` / `xb_ai_monitor_app` → `ap_app`，沿用 `app_id`/`api_key`，`INSERT IGNORE` 幂等，人工执行）
+- [x] 记忆窗口：`core/config.py`（`AP_HISTORY_WINDOW`）+ `api/services.py`（`load_history`）+ `api/main.py`（`history` 变量注入图输入；默认 0 时不注入，行为与改造前逐字节一致）
+- [x] 测试：`tests/` 199 项全绿（schema/expr/engine/nodes/condition/checkpointer/api/admin/compat/knowledge/mcp/worker/observability/guards/crypto/security），`ruff check` 通过
+
+**未纳入本批**：M3 的独立中台前端与监控看板、独立账号体系（角色/权限管理端），M4 的 Dify 导入器；记忆的「可选摘要」；`AP_IDEMPOTENCY_TTL_SECONDS` / `AP_MAX_CONCURRENCY_PER_APP` 已预留配置但未接线。
 
 **环境备注**：本机 Python 3.11.1；依赖已 `pip install -e ".[dev]"`；测试用临时 SQLite（`conftest.py`），生产用 MySQL（`sql/ddl.sql` 人工执行）。
 

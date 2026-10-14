@@ -5,6 +5,7 @@ description = "agent 中台：基于 LangChain/LangGraph 的图编排引擎与�
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.110",
+    "python-multipart>=0.0.9",
     "uvicorn[standard]>=0.27",
     "pydantic>=2.6",
     "pydantic-settings>=2.1",

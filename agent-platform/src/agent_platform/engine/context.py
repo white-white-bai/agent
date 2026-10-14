@@ -1,4 +1,4 @@
-"""引擎运行时依赖（模型 / 检索 / 工具 / 代码执行）。"""
+"""引擎运行时依赖（模型 / 检索 / 工具 / 代码执行 / 追踪）。"""
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
@@ -22,22 +22,30 @@ class LLMInvoker(Protocol):
 
 
 class Retriever(Protocol):
-    async def __call__(self, config: KnowledgeConfig, query: str) -> list[dict[str, Any]]: ...
+    async def __call__(
+        self, config: KnowledgeConfig, query: str, tenant_code: str = ""
+    ) -> list[dict[str, Any]]: ...
 
 
 class ToolInvoker(Protocol):
-    async def __call__(self, config: ToolConfig, variables: dict[str, Any]) -> Any: ...
+    async def __call__(
+        self, config: ToolConfig, variables: dict[str, Any], tenant_code: str = ""
+    ) -> Any: ...
 
 
 class CodeRunner(Protocol):
     def __call__(self, config: CodeConfig, variables: dict[str, Any]) -> dict[str, Any]: ...
 
 
-async def _empty_retriever(config: KnowledgeConfig, query: str) -> list[dict[str, Any]]:
+async def _empty_retriever(
+    config: KnowledgeConfig, query: str, tenant_code: str = ""
+) -> list[dict[str, Any]]:
     return []
 
 
-async def _unavailable_tool_invoker(config: ToolConfig, variables: dict[str, Any]) -> Any:
+async def _unavailable_tool_invoker(
+    config: ToolConfig, variables: dict[str, Any], tenant_code: str = ""
+) -> Any:
     raise RuntimeError("工具调用未配置：请在 EngineContext 注入 ToolInvoker")
 
 
@@ -47,6 +55,8 @@ class EngineContext:
     retriever: Retriever = field(default=_empty_retriever)
     tools: ToolInvoker = field(default=_unavailable_tool_invoker)
     code_runner: CodeRunner | None = None
+    tenant_code: str = ""
+    tracer: Any = None
 
 
 EngineNodeFn = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]

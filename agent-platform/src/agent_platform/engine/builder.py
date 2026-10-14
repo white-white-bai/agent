@@ -24,18 +24,34 @@ _RUNNERS: dict[NodeType, Callable] = {
 }
 
 
+def _tracer(ctx: EngineContext) -> Any:
+    tracer = getattr(ctx, "tracer", None)
+    return tracer if tracer is not None and getattr(tracer, "enabled", False) else None
+
+
 def _node_fn(node: NodeDef, ctx: EngineContext) -> Callable[[GraphState], Any]:
     runner = _RUNNERS[node.type]
+    tracer = _tracer(ctx)
 
     if node.type in (NodeType.LLM, NodeType.KNOWLEDGE, NodeType.TOOL):
 
         async def afn(state: GraphState) -> GraphState:
-            return await runner(node, state, ctx)
+            if tracer is None:
+                return await runner(node, state, ctx)
+            with tracer.node_span(node.id, node.type.value, payload=state.get("variables")) as span:
+                result = await runner(node, state, ctx)
+                span.end(output=result.get("variables"))
+                return result
 
         return afn
 
     def sfn(state: GraphState) -> GraphState:
-        return runner(node, state, ctx)
+        if tracer is None:
+            return runner(node, state, ctx)
+        with tracer.node_span(node.id, node.type.value, payload=state.get("variables")) as span:
+            result = runner(node, state, ctx)
+            span.end(output=result.get("variables"))
+            return result
 
     return sfn
 
