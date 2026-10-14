@@ -28,10 +28,10 @@ def _sign(payload: bytes, secret: str) -> str:
     return hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
 
 
-def issue_token(client_id: str, *, ttl_seconds: int = 3600) -> tuple[str, int]:
+def issue_token(client_id: str, *, ttl_seconds: int = 3600, claims: dict[str, Any] | None = None) -> tuple[str, int]:
     settings = get_settings()
     expire = int(time.time()) + ttl_seconds
-    body = json.dumps({"sub": client_id, "exp": expire}, ensure_ascii=False).encode()
+    body = json.dumps({"sub": client_id, "exp": expire, **(claims or {})}, ensure_ascii=False).encode()
     encoded = _b64encode(body)
     return f"{encoded}.{_sign(body, settings.jwt_secret)}", ttl_seconds
 

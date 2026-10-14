@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     max_concurrency_per_app: int = 0
     concurrency_wait_seconds: float = 0.0
 
+    # 中台账号体系（独立自建）：false 时 /admin 免鉴权，行为与改造前一致
+    admin_auth_enabled: bool = False
+    admin_seed_username: str = "admin"
+    admin_seed_password: str = "admin123"
+    admin_token_ttl_seconds: int = 7200
+
 
 @lru_cache
 def get_settings() -> Settings:

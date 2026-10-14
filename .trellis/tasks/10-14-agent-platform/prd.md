@@ -115,7 +115,7 @@
 - [ ] **独立中台前端**：agent 列表、图编辑器（AntV X6）、模型/工具(MCP)/知识库/provider 配置、账号/角色、护栏配置。
 - [ ] **监控看板**：会话量/满意度/token/错误率（中台 MySQL + Langfuse 汇总）。
 - [x] **Langfuse 自托管**集成：节点级 trace 上报。
-- [ ] **独立账号体系**：种子管理员 + 自管理角色/权限；租户维度隔离。
+- [x] **独立账号体系（后端）**：种子管理员 + 自管理角色/权限；租户维度隔离。见「M3 续批（2026-10-14）· 账号」。
 
 ### M4 迁移工具（后续）
 - [ ] **Dify 导入器**：Dify DSL → 中台 schema 映射；不支持节点降级 + 提示。
@@ -200,7 +200,16 @@
 - [x] 内网冒烟：`scripts/smoke_e2e.py`（真 MySQL + 真云智网关 + 真实模型：建表 → 注册/复用应用 → 发布图 → 打原始 Dify 与云智两条链路 → 断言 SSE 事件序列与各 Envelope 形状，含工作流三重嵌套）
 - [x] 测试：`tests/test_idempotency.py`、`tests/test_concurrency.py` 共 23 项（单测 + API 契约），全套 222 项全绿，`ruff check` 通过
 
-**未纳入本批**：M3 的独立中台前端与监控看板、独立账号体系（角色/权限管理端），M4 的 Dify 导入器；记忆的「可选摘要」。
+**M3 续批（2026-10-14）· 账号**：独立账号体系后端已完成并覆盖测试。
+
+- [x] 模型与建表：`domain/models.py` 增 `AdminRole` / `AdminUser`；`sql/ddl.sql` 增 `ap_admin_role` / `ap_admin_user`（幂等 DDL，人工执行）
+- [x] 核心：`core/accounts.py`（PBKDF2-HMAC-SHA256 20 万轮 + 每账号 16 字节随机盐单向存口令；内置 `admin`/`editor`/`viewer` 三角色；`AdminPrincipal.allows` 通配权限与 `scope_tenant` 租户隔离；`seed()` 幂等播种种子管理员）
+- [x] 令牌：复用兼容层 JWT 签名并加 `typ=admin` 与角色/租户声明，`principal_from_token` 拒绝云智 `client_credentials` 令牌，双向不可冒充
+- [x] 接入：`api/deps.py`（`get_current_admin` / `require_admin` / `require_permission`）、`api/accounts.py`（`/admin/login|me|users|roles`）、`api/admin.py`（全部路由加权限点与租户收口）、`api/main.py`（挂载路由 + 开启时 lifespan 播种）
+- [x] 默认关闭：`AP_ADMIN_AUTH_ENABLED=false` 时 `/admin` 免鉴权（匿名全权），历史契约测试零改动
+- [x] 测试：`tests/test_accounts.py` 27 项（口令哈希/校验、角色权限、租户收口、登录与停用、令牌类型隔离、种子幂等、管理端 401/403 与 CRUD），全套 249 项全绿，`ruff check` 通过
+
+**未纳入本批**：M3 的独立中台前端（含账号/角色页面）与监控看板，M4 的 Dify 导入器；记忆的「可选摘要」。
 
 **环境备注**：本机 Python 3.11.1；依赖已 `pip install -e ".[dev]"`；测试用临时 SQLite（`conftest.py`），生产用 MySQL（`sql/ddl.sql` 人工执行）。
 

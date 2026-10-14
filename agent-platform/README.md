@@ -20,7 +20,7 @@ agent-platform/
 ├── .env.example
 ├── sql/                     # 建表 / 迁移脚本（人工执行，仓库无 DDL 目录）
 ├── src/agent_platform/
-│   ├── core/                # 配置、DB、Redis、日志
+│   ├── core/                # 配置、DB、Redis、日志、账号（角色/权限/口令）
 │   ├── domain/              # ORM 模型（应用/租户/图/会话/护栏）
 │   ├── graph/               # 图定义 schema（pydantic）
 │   ├── engine/              # LangGraph 执行器与节点
@@ -52,6 +52,7 @@ agent-platform/
 - 图：`GET /apps/{uuid}/graph`、`PUT /apps/{uuid}/graph/draft`、`POST /apps/{uuid}/graph/publish`、
   `GET /apps/{uuid}/graph/versions`、`POST /apps/{uuid}/graph/rollback`（运行态只跑已发布版本）。
 - 配置：`/sensitive-words`、`/mcp-servers`、`/documents`（内置向量库）。
+- 账号：`POST /login`（免鉴权）、`GET /me`、`/users`、`/roles`（见下）。
 
 健康检查：`GET /healthz`。
 
@@ -95,6 +96,28 @@ python -m agent_platform.worker.main
   轮询等空位，仍拿不到槽位则返回 `error` 事件；槽位带 TTL 兜底，进程异常退出不会永久占位。
 
 两者共用 Redis 计数/键值，Redis 不可用时降级为进程内存储（单实例语义）。
+
+## 独立账号体系（默认关闭）
+
+`AP_ADMIN_AUTH_ENABLED=false` 时 `/admin` 免鉴权（匿名全权），行为与改造前逐字节一致；置 `true` 后管理端
+需 `Authorization: Bearer <token>`，且启动时幂等播种内置角色与种子管理员。
+
+- **口令**：PBKDF2-HMAC-SHA256（20 万轮）+ 每账号随机 16 字节盐，单向存储；SM4 可逆，不用于口令。
+- **令牌**：复用兼容层 JWT 签名，额外带 `typ=admin` 与角色/租户声明。云智 `client_credentials` 令牌与
+  管理端令牌互不冒充：前者过不了 `/admin` 的 `typ` 校验，后者在兼容链路查不到 app `api_key`。
+- **角色**：内置 `admin`（`*`）、`editor`（读写应用/图/护栏/MCP/知识库）、`viewer`（只读），可自建 / 删除自建角色，
+  内置角色不可删。权限点形如 `app:read`、`graph:write`，路由级 `require_permission(...)` 校验。
+- **租户隔离**：账号绑定 `tenant_code` 后，列表/新增接口只能看到与写入本租户数据（`scope_tenant`）；
+  未绑定（空）表示全局，与改造前一致。
+
+```bash
+curl -X POST localhost:8900/admin/login -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin123"}'          # → {"data":{"token":...}}
+curl localhost:8900/admin/apps -H "Authorization: Bearer <token>"
+```
+
+种子账号名/口令与令牌有效期由 `AP_ADMIN_SEED_USERNAME`、`AP_ADMIN_SEED_PASSWORD`、`AP_ADMIN_TOKEN_TTL_SECONDS`
+配置；**上线前必须改掉默认口令**。
 
 ## 观测
 

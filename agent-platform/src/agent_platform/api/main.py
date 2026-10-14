@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, Header
 from fastapi.responses import StreamingResponse
 
-from agent_platform.api import admin, compat, compat_api, services
+from agent_platform.api import accounts, admin, compat, compat_api, services
 from agent_platform.api.deps import (
     build_request_tracer,
     get_concurrency_limiter,
@@ -18,6 +18,7 @@ from agent_platform.api.deps import (
     get_idempotency_store,
 )
 from agent_platform.api.schemas import ChatMessagesRequest
+from agent_platform.core import accounts as accounts_core
 from agent_platform.core.concurrency import ConcurrencyLimiter
 from agent_platform.core.config import get_settings
 from agent_platform.core.db import init_db
@@ -31,11 +32,15 @@ from agent_platform.engine.runtime import stream_graph
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_db()
+    if get_settings().admin_auth_enabled:
+        accounts_core.seed()
     yield
 
 
 app = FastAPI(title="agent-platform", version="0.1.0", lifespan=lifespan)
 app.include_router(admin.router)
+app.include_router(accounts.router)
+app.include_router(compat_api.router)
 app.include_router(compat_api.router)
 
 

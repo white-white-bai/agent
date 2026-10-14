@@ -4,9 +4,10 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from agent_platform.api import services
+from agent_platform.api.deps import get_current_admin, require_admin, require_permission
 from agent_platform.api.schemas import (
     AppCreateRequest,
     AppUpdateRequest,
@@ -17,11 +18,12 @@ from agent_platform.api.schemas import (
     McpServerCreateRequest,
     SensitiveWordCreateRequest,
 )
+from agent_platform.core.accounts import AdminPrincipal
 from agent_platform.core.config import get_settings
 from agent_platform.knowledge.embeddings import Embedder
 from agent_platform.knowledge.vector_store import add_document, delete_document
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
 
 def _app_dict(row: Any) -> dict[str, Any]:
@@ -52,15 +54,15 @@ def _version_dict(row: Any) -> dict[str, Any]:
 
 # --------------------------------------------------------------------------- 应用注册表
 
-@router.get("/apps")
-def list_apps(tenant_code: str = "") -> dict[str, Any]:
-    return {"data": [_app_dict(row) for row in services.list_apps(tenant_code)]}
+@router.get("/apps", dependencies=[Depends(require_permission("app:read"))])
+def list_apps(tenant_code: str = "", principal: AdminPrincipal = Depends(get_current_admin)) -> dict[str, Any]:
+    return {"data": [_app_dict(row) for row in services.list_apps(principal.scope_tenant(tenant_code))]}
 
 
-@router.post("/apps")
-def create_app(request: AppCreateRequest) -> dict[str, Any]:
+@router.post("/apps", dependencies=[Depends(require_permission("app:write"))])
+def create_app(request: AppCreateRequest, principal: AdminPrincipal = Depends(get_current_admin)) -> dict[str, Any]:
     settings = get_settings()
-    tenant_code = request.tenant_code or settings.default_tenant
+    tenant_code = principal.scope_tenant(request.tenant_code or settings.default_tenant)
     app_id = request.app_id or uuid.uuid4().hex
     api_key = request.api_key or uuid.uuid4().hex
     row = services.create_app(
@@ -77,7 +79,7 @@ def create_app(request: AppCreateRequest) -> dict[str, Any]:
     return {"data": _app_dict(row)}
 
 
-@router.get("/apps/{app_uuid}")
+@router.get("/apps/{app_uuid}", dependencies=[Depends(require_permission("app:read"))])
 def get_app(app_uuid: str) -> dict[str, Any]:
     row = services.get_app_by_uuid(app_uuid)
     if row is None:
@@ -85,7 +87,7 @@ def get_app(app_uuid: str) -> dict[str, Any]:
     return {"data": _app_dict(row)}
 
 
-@router.put("/apps/{app_uuid}")
+@router.put("/apps/{app_uuid}", dependencies=[Depends(require_permission("app:write"))])
 def update_app(app_uuid: str, request: AppUpdateRequest) -> dict[str, Any]:
     row = services.update_app(app_uuid, **request.model_dump(exclude_unset=True))
     if row is None:
@@ -93,7 +95,7 @@ def update_app(app_uuid: str, request: AppUpdateRequest) -> dict[str, Any]:
     return {"data": _app_dict(row)}
 
 
-@router.delete("/apps/{app_uuid}")
+@router.delete("/apps/{app_uuid}", dependencies=[Depends(require_permission("app:write"))])
 def delete_app(app_uuid: str) -> dict[str, Any]:
     if not services.delete_app(app_uuid):
         raise HTTPException(status_code=404, detail="应用不存在")
@@ -102,7 +104,7 @@ def delete_app(app_uuid: str) -> dict[str, Any]:
 
 # --------------------------------------------------------------------------- 图草稿 / 发布 / 回滚
 
-@router.get("/apps/{app_uuid}/graph")
+@router.get("/apps/{app_uuid}/graph", dependencies=[Depends(require_permission("graph:read"))])
 def get_graph(app_uuid: str) -> dict[str, Any]:
     definition = services.get_draft(app_uuid)
     graph = services.get_graph_by_app_uuid(app_uuid)
@@ -115,7 +117,7 @@ def get_graph(app_uuid: str) -> dict[str, Any]:
     }
 
 
-@router.put("/apps/{app_uuid}/graph/draft")
+@router.put("/apps/{app_uuid}/graph/draft", dependencies=[Depends(require_permission("graph:write"))])
 def save_graph_draft(app_uuid: str, request: GraphDraftRequest) -> dict[str, Any]:
     if services.get_app_by_uuid(app_uuid) is None:
         raise HTTPException(status_code=404, detail="应用不存在")
@@ -123,7 +125,7 @@ def save_graph_draft(app_uuid: str, request: GraphDraftRequest) -> dict[str, Any
     return {"data": {"app_uuid": app_uuid, "status": graph.status, "definition": graph.draft}}
 
 
-@router.post("/apps/{app_uuid}/graph/publish")
+@router.post("/apps/{app_uuid}/graph/publish", dependencies=[Depends(require_permission("graph:write"))])
 def publish_graph(app_uuid: str, request: GraphPublishRequest) -> dict[str, Any]:
     try:
         version = services.publish_draft(
@@ -136,12 +138,12 @@ def publish_graph(app_uuid: str, request: GraphPublishRequest) -> dict[str, Any]
     return {"data": _version_dict(version)}
 
 
-@router.get("/apps/{app_uuid}/graph/versions")
+@router.get("/apps/{app_uuid}/graph/versions", dependencies=[Depends(require_permission("graph:read"))])
 def list_graph_versions(app_uuid: str) -> dict[str, Any]:
     return {"data": [_version_dict(row) for row in services.list_versions(app_uuid)]}
 
 
-@router.post("/apps/{app_uuid}/graph/rollback")
+@router.post("/apps/{app_uuid}/graph/rollback", dependencies=[Depends(require_permission("graph:write"))])
 def rollback_graph(app_uuid: str, request: GraphRollbackRequest) -> dict[str, Any]:
     version = services.rollback(app_uuid, request.version)
     if version is None:
@@ -151,23 +153,26 @@ def rollback_graph(app_uuid: str, request: GraphRollbackRequest) -> dict[str, An
 
 # --------------------------------------------------------------------------- 护栏：敏感词
 
-@router.get("/sensitive-words")
-def list_sensitive_words(tenant_code: str = "") -> dict[str, Any]:
+@router.get("/sensitive-words", dependencies=[Depends(require_permission("guard:read"))])
+def list_sensitive_words(tenant_code: str = "", principal: AdminPrincipal = Depends(get_current_admin)) -> dict[str, Any]:
     return {
         "data": [
             {"id": row.id, "tenant_code": row.tenant_code, "word": row.word}
-            for row in services.list_sensitive_words(tenant_code)
+            for row in services.list_sensitive_words(principal.scope_tenant(tenant_code))
         ]
     }
 
 
-@router.post("/sensitive-words")
-def create_sensitive_word(request: SensitiveWordCreateRequest) -> dict[str, Any]:
-    row = services.add_sensitive_word(request.tenant_code or get_settings().default_tenant, request.word)
+@router.post("/sensitive-words", dependencies=[Depends(require_permission("guard:write"))])
+def create_sensitive_word(
+    request: SensitiveWordCreateRequest, principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
+    tenant_code = principal.scope_tenant(request.tenant_code or get_settings().default_tenant)
+    row = services.add_sensitive_word(tenant_code, request.word)
     return {"data": {"id": row.id, "tenant_code": row.tenant_code, "word": row.word}}
 
 
-@router.delete("/sensitive-words/{word_id}")
+@router.delete("/sensitive-words/{word_id}", dependencies=[Depends(require_permission("guard:write"))])
 def delete_sensitive_word(word_id: int) -> dict[str, Any]:
     if not services.delete_sensitive_word(word_id):
         raise HTTPException(status_code=404, detail="敏感词不存在")
@@ -176,8 +181,10 @@ def delete_sensitive_word(word_id: int) -> dict[str, Any]:
 
 # --------------------------------------------------------------------------- MCP Server 注册
 
-@router.get("/mcp-servers")
-def list_mcp_servers(tenant_code: str = "") -> dict[str, Any]:
+@router.get("/mcp-servers", dependencies=[Depends(require_permission("mcp:read"))])
+def list_mcp_servers(
+    tenant_code: str = "", principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
     return {
         "data": [
             {
@@ -188,15 +195,17 @@ def list_mcp_servers(tenant_code: str = "") -> dict[str, Any]:
                 "url": row.url,
                 "headers": row.headers or {},
             }
-            for row in services.list_mcp_servers(tenant_code)
+            for row in services.list_mcp_servers(principal.scope_tenant(tenant_code))
         ]
     }
 
 
-@router.post("/mcp-servers")
-def create_mcp_server(request: McpServerCreateRequest) -> dict[str, Any]:
+@router.post("/mcp-servers", dependencies=[Depends(require_permission("mcp:write"))])
+def create_mcp_server(
+    request: McpServerCreateRequest, principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
     row = services.create_mcp_server(
-        tenant_code=request.tenant_code or get_settings().default_tenant,
+        tenant_code=principal.scope_tenant(request.tenant_code or get_settings().default_tenant),
         name=request.name,
         url=request.url,
         kind=request.kind,
@@ -205,7 +214,7 @@ def create_mcp_server(request: McpServerCreateRequest) -> dict[str, Any]:
     return {"data": {"uuid": row.uuid, "name": row.name, "kind": row.kind, "url": row.url}}
 
 
-@router.delete("/mcp-servers/{server_uuid}")
+@router.delete("/mcp-servers/{server_uuid}", dependencies=[Depends(require_permission("mcp:write"))])
 def delete_mcp_server(server_uuid: str) -> dict[str, Any]:
     if not services.delete_mcp_server(server_uuid):
         raise HTTPException(status_code=404, detail="MCP Server 不存在")
@@ -214,11 +223,13 @@ def delete_mcp_server(server_uuid: str) -> dict[str, Any]:
 
 # --------------------------------------------------------------------------- 知识库文档
 
-@router.get("/documents")
-def list_documents(tenant_code: str = "", dataset_id: str = "") -> dict[str, Any]:
+@router.get("/documents", dependencies=[Depends(require_permission("knowledge:read"))])
+def list_documents(
+    tenant_code: str = "", dataset_id: str = "", principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
     from agent_platform.knowledge.vector_store import list_documents as _list
 
-    rows = _list(tenant_code or get_settings().default_tenant, dataset_id)
+    rows = _list(principal.scope_tenant(tenant_code) or get_settings().default_tenant, dataset_id)
     return {
         "data": [
             {
@@ -234,13 +245,15 @@ def list_documents(tenant_code: str = "", dataset_id: str = "") -> dict[str, Any
     }
 
 
-@router.post("/documents")
-async def create_document(request: DocumentCreateRequest) -> dict[str, Any]:
+@router.post("/documents", dependencies=[Depends(require_permission("knowledge:write"))])
+async def create_document(
+    request: DocumentCreateRequest, principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
     settings = get_settings()
     embedder = Embedder(settings)
     embedding = await embedder.encode(request.content)
     row = add_document(
-        tenant_code=request.tenant_code or settings.default_tenant,
+        tenant_code=principal.scope_tenant(request.tenant_code or settings.default_tenant),
         dataset_id=request.dataset_id,
         title=request.title,
         content=request.content,
@@ -250,7 +263,7 @@ async def create_document(request: DocumentCreateRequest) -> dict[str, Any]:
     return {"data": {"uuid": row.uuid, "title": row.title, "dataset_id": row.dataset_id}}
 
 
-@router.delete("/documents/{document_uuid}")
+@router.delete("/documents/{document_uuid}", dependencies=[Depends(require_permission("knowledge:write"))])
 def delete_document_endpoint(document_uuid: str) -> dict[str, Any]:
     if not delete_document(document_uuid):
         raise HTTPException(status_code=404, detail="文档不存在")

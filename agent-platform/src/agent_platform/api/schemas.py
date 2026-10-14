@@ -146,3 +146,32 @@ class DocumentCreateRequest(BaseModel):
     title: str = ""
     content: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+# --------------------------------------------------------------------------- 管理端账号
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class UserCreateRequest(BaseModel):
+    username: str
+    password: str
+    role_code: str = "viewer"
+    tenant_code: str = ""
+    display_name: str = ""
+
+
+class UserUpdateRequest(BaseModel):
+    role_code: str | None = None
+    tenant_code: str | None = None
+    display_name: str | None = None
+    is_active: int | None = None
+    password: str = ""
+
+
+class RoleCreateRequest(BaseModel):
+    code: str
+    name: str = ""
+    permissions: list[str] = Field(default_factory=list)

@@ -171,3 +171,34 @@ CREATE TABLE IF NOT EXISTS ap_mcp_server (
     UNIQUE KEY uk_ap_mcp_server_uuid (uuid),
     KEY idx_ap_mcp_server_name (tenant_code, name)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'MCP Server 注册表';
+
+CREATE TABLE IF NOT EXISTS ap_admin_role (
+    id          BIGINT       NOT NULL AUTO_INCREMENT,
+    code        VARCHAR(64)  NOT NULL,
+    name        VARCHAR(128) NOT NULL DEFAULT '',
+    permissions JSON         NULL,
+    is_builtin  INT          NOT NULL DEFAULT 0,
+    created_at  DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_ap_admin_role_code (code)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '中台管理端角色';
+
+CREATE TABLE IF NOT EXISTS ap_admin_user (
+    id            BIGINT       NOT NULL AUTO_INCREMENT,
+    uuid          VARCHAR(64)  NOT NULL,
+    username      VARCHAR(64)  NOT NULL,
+    password_hash VARCHAR(128) NOT NULL,
+    salt          VARCHAR(64)  NOT NULL,
+    display_name  VARCHAR(128) NOT NULL DEFAULT '',
+    role_code     VARCHAR(64)  NOT NULL DEFAULT 'viewer',
+    tenant_code   VARCHAR(64)  NOT NULL DEFAULT '',
+    is_active     INT          NOT NULL DEFAULT 1,
+    last_login_at DATETIME     NULL,
+    created_at    DATETIME     NOT NULL,
+    updated_at    DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_ap_admin_user_uuid (uuid),
+    UNIQUE KEY uk_ap_admin_user_username (username),
+    KEY idx_ap_admin_user_role (role_code),
+    KEY idx_ap_admin_user_tenant (tenant_code)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '中台管理端账号';

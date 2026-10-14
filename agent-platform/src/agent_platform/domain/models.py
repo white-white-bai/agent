@@ -171,3 +171,31 @@ class CheckpointWrite(Base):
     channel: Mapped[str] = mapped_column(String(128))
     type: Mapped[str] = mapped_column(String(32))
     value: Mapped[bytes] = mapped_column(LargeBinary)
+
+
+class AdminRole(Base):
+    __tablename__ = "ap_admin_role"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(128), default="")
+    permissions: Mapped[list] = mapped_column(JSON, default=list)
+    is_builtin: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class AdminUser(Base):
+    __tablename__ = "ap_admin_user"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(128))
+    salt: Mapped[str] = mapped_column(String(64))
+    display_name: Mapped[str] = mapped_column(String(128), default="")
+    role_code: Mapped[str] = mapped_column(String(64), index=True, default="viewer")
+    tenant_code: Mapped[str] = mapped_column(String(64), index=True, default="")
+    is_active: Mapped[int] = mapped_column(Integer, default=1)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
