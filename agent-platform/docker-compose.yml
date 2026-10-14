@@ -1,0 +1,43 @@
+services:
+  api:
+    build: .
+    image: agent-platform:dev
+    env_file: .env
+    ports:
+      - "8900:8900"
+    depends_on:
+      - langfuse
+
+  # 长任务 worker（M1 占位，异步任务实现后接入 Redis 队列）
+  worker:
+    build: .
+    image: agent-platform:dev
+    env_file: .env
+    command: ["python", "-c", "print('worker placeholder: 接入 Redis 队列后启用')"]
+    depends_on:
+      - langfuse
+
+  # Langfuse 自托管（节点级 trace / 汇总看板）
+  langfuse:
+    image: langfuse/langfuse:2
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-db:5432/langfuse
+      NEXTAUTH_SECRET: change-me
+      SALT: change-me
+      NEXTAUTH_URL: http://localhost:3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - langfuse-db
+
+  langfuse-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse_pgdata:/var/lib/postgresql/data
+
+volumes:
+  langfuse_pgdata:

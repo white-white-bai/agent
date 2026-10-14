@@ -1,0 +1,6 @@
+{"file": ".trellis/tasks/10-14-agent-platform/research/dify-cloud-contract.md", "reason": "兼容契约基线：云智/原始 Dify 接口、鉴权、Envelope、SSE 事件、模型网关——M2 出口适配器与兼容接口实现依据"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨层数据流：图配置→执行器→checkpointer/消息表→兼容接口出口"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用现有约定与配置，避免重复造轮子"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "MySQL/字段命名约定，对齐中台新 schema 与现有库（含 SM4 加密）"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "后端质量基线，M1 引擎/接口实现遵循"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "M3 中台前端质量基线"}
