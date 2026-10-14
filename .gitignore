@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# Build output
+platform/dist/
+
+# Session records — SENSITIVE. ADR 0002: a session record contains the
+# learner's misconceptions and their own words. Never commit these.
+platform/.sessions/
+
+# Real learners' experiment trials — SENSITIVE, and more so than a session: a
+# trial holds the learner's answers, their misconceptions, what they said they
+# thought they understood, AND the label they were filed under (ADR 0019).
+platform/.experiments/
+
+# Domain drafts and fetched sources — the builder's working material (ADR 0010).
+# A draft becomes a Domain by signature, not by being committed, and the fetched
+# third-party texts are review evidence rather than library content.
+domains-draft/
+domains/*/sources/
+
+# Personal working preferences — deliberately local. `.commandcode/skills/` is
+# the shareable skills collection and stays tracked; this is the record of how
+# this particular person works, and it is not anyone else's business.
+.commandcode/taste/
+
+# Local provider configuration — the key's home (both stacks read it; see src/util/local-env.ts).
+# Gitignored like everything else that is a credential: it lives on the machine, never in history.
+.env
+
+# Python — the full-stack service (ADR 0013). The venv is local; the assets it reads are
+# shared and remain tracked where they have always lived.
+agent/.venv/
+agent/.state/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Scratch
+*.log
+.DS_Store
+Thumbs.db
