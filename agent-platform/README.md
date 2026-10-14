@@ -23,6 +23,7 @@ agent-platform/
 │   ├── core/                # 配置、DB、Redis、日志、账号（角色/权限/口令）
 │   ├── domain/              # ORM 模型（应用/租户/图/会话/护栏）
 │   ├── graph/               # 图定义 schema（pydantic）
+│   ├── importer/            # Dify DSL → 中台图定义（导入器 + CLI）
 │   ├── engine/              # LangGraph 执行器与节点
 │   ├── models/              # 模型适配器（云智网关 / OpenAI 兼容）
 │   ├── knowledge/           # 检索适配器（内置向量库 / 外接平台）
@@ -50,11 +51,34 @@ agent-platform/
 
 - 应用：`GET|POST /apps`、`GET|PUT|DELETE /apps/{uuid}`。
 - 图：`GET /apps/{uuid}/graph`、`PUT /apps/{uuid}/graph/draft`、`POST /apps/{uuid}/graph/publish`、
-  `GET /apps/{uuid}/graph/versions`、`POST /apps/{uuid}/graph/rollback`（运行态只跑已发布版本）。
+  `GET /apps/{uuid}/graph/versions`、`POST /apps/{uuid}/graph/rollback`、`POST /apps/{uuid}/graph/import`
+  （Dify DSL 导入，见下；运行态只跑已发布版本）。
 - 配置：`/sensitive-words`、`/mcp-servers`、`/documents`（内置向量库）。
 - 账号：`POST /login`（免鉴权）、`GET /me`、`/users`、`/roles`（见下）。
 
 健康检查：`GET /healthz`。
+
+## Dify 导入
+
+把 Dify 导出的 DSL（JSON / YAML）转成中台图定义，供存量应用平滑迁移。CLI：
+
+```bash
+python -m agent_platform.importer app.yml -o graph.json   # 缺省打印到 stdout
+python -m agent_platform.importer app.yml --llm-provider openai --retriever light_rag
+```
+
+管理端：`POST /admin/apps/{uuid}/graph/import`，body 二选一 `dsl`（对象）或 `content`（JSON/YAML 字符串），
+其余可选 `name`（覆盖应用名，缺省取应用注册名）、`llm_provider`、`retriever`、`save`（默认 `true` 直接存草稿）；
+返回 `{stats, warnings, definition}`，`warnings` 逐条说明降级与需人工复核项。应用不存在 404，DSL 非法 400。
+
+- **可映射节点**：`start` / `end` / `llm` / `knowledge-retrieval` / `if-else` / `code`(python3) / `tool` /
+  `variable-aggregator` / `answer`。
+- **降级**：其余节点（如 `http-request`、`template-transform`、非 python3 的 `code`）旁路丢弃并提示，其前后边按
+  DFS 传递重连；`all of` / `any of` 等 Jinja2 无法表达的比较降为常量 `false` 并提示。
+- **变量引用**：Dify `{{#node.var#}}` 按目标字段语义改写 —— 模板字段（LLM 提示词、知识库 query、answer）还原为
+  `{{ }}` 模板，表达式字段（end 输出、条件、code 入参、tool 参数）还原为裸表达式。
+- **LLM 适配**：Dify 的模型 provider 不映射，统一落到 `--llm-provider`（默认 `cloud_gateway`），模型名沿用 DSL，
+  参数取 `completion_params`（缺省 temperature 0.7）。`tool` 节点落到 MCP，需按 `server` 名在中台注册 MCP Server。
 
 ## 数据库与迁移
 

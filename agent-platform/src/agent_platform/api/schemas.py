@@ -127,6 +127,15 @@ class GraphRollbackRequest(BaseModel):
     version: int
 
 
+class GraphImportRequest(BaseModel):
+    dsl: dict[str, Any] | None = None
+    content: str = ""
+    llm_provider: str = "cloud_gateway"
+    retriever: str = "builtin"
+    name: str = ""
+    save: bool = True
+
+
 class SensitiveWordCreateRequest(BaseModel):
     tenant_code: str = ""
     word: str

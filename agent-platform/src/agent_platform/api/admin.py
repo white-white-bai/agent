@@ -13,6 +13,7 @@ from agent_platform.api.schemas import (
     AppUpdateRequest,
     DocumentCreateRequest,
     GraphDraftRequest,
+    GraphImportRequest,
     GraphPublishRequest,
     GraphRollbackRequest,
     McpServerCreateRequest,
@@ -20,6 +21,7 @@ from agent_platform.api.schemas import (
 )
 from agent_platform.core.accounts import AdminPrincipal
 from agent_platform.core.config import get_settings
+from agent_platform.importer import DifyImportError, convert, parse_dsl
 from agent_platform.knowledge.embeddings import Embedder
 from agent_platform.knowledge.vector_store import add_document, delete_document
 
@@ -149,6 +151,35 @@ def rollback_graph(app_uuid: str, request: GraphRollbackRequest) -> dict[str, An
     if version is None:
         raise HTTPException(status_code=404, detail="版本不存在")
     return {"data": _version_dict(version)}
+
+
+@router.post("/apps/{app_uuid}/graph/import", dependencies=[Depends(require_permission("graph:write"))])
+def import_graph(app_uuid: str, request: GraphImportRequest) -> dict[str, Any]:
+    app_row = services.get_app_by_uuid(app_uuid)
+    if app_row is None:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    try:
+        dsl = request.dsl if request.dsl is not None else parse_dsl(request.content)
+        result = convert(
+            dsl,
+            app_id=app_row.app_id,
+            name=request.name or app_row.app_name,
+            llm_provider=request.llm_provider,
+            retriever=request.retriever,
+        )
+    except DifyImportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if request.save:
+        services.save_draft(app_uuid, result.definition)
+    return {
+        "data": {
+            "app_uuid": app_uuid,
+            "saved": request.save,
+            "stats": result.stats,
+            "warnings": result.warnings,
+            "definition": result.definition,
+        }
+    }
 
 
 # --------------------------------------------------------------------------- 护栏：敏感词

@@ -118,7 +118,7 @@
 - [x] **独立账号体系（后端）**：种子管理员 + 自管理角色/权限；租户维度隔离。见「M3 续批（2026-10-14）· 账号」。
 
 ### M4 迁移工具（后续）
-- [ ] **Dify 导入器**：Dify DSL → 中台 schema 映射；不支持节点降级 + 提示。
+- [x] **Dify 导入器**：Dify DSL → 中台 schema 映射；不支持节点降级 + 提示。见「M4 续批（2026-10-14）· Dify 导入器」。
 
 ## Acceptance Criteria
 
@@ -209,7 +209,18 @@
 - [x] 默认关闭：`AP_ADMIN_AUTH_ENABLED=false` 时 `/admin` 免鉴权（匿名全权），历史契约测试零改动
 - [x] 测试：`tests/test_accounts.py` 27 项（口令哈希/校验、角色权限、租户收口、登录与停用、令牌类型隔离、种子幂等、管理端 401/403 与 CRUD），全套 249 项全绿，`ruff check` 通过
 
-**未纳入本批**：M3 的独立中台前端（含账号/角色页面）与监控看板，M4 的 Dify 导入器；记忆的「可选摘要」。
+**M4 续批（2026-10-14）· Dify 导入器**：Dify DSL → 中台图定义导入已完成并覆盖测试。
+
+- [x] 转换器：`importer/dify.py`（`convert` / `parse_dsl` / `load_dsl`；`_Converter` 完成节点/边/变量映射与降级重连）
+- [x] 可映射节点：`start` / `end` / `llm` / `knowledge-retrieval` / `if-else` / `code`(python3) / `tool` / `variable-aggregator` / `answer`
+- [x] 降级：其余节点（`http-request`、`template-transform`、非 python3 的 `code` 等）旁路丢弃并按 DFS 传递重连前后边，逐条给出 `warnings`；`all of` / `any of` 等 Jinja2 无法表达的比较降为常量 `false` 并提示
+- [x] 变量改写：`{{#node.var#}}` 按目标字段语义改写为 `{{ }}` 模板（提示词/query/answer）或裸表达式（end 输出、条件、code 入参、tool 参数）；Dify 字符串化比较值对关系运算符做数值还原
+- [x] CLI：`python -m agent_platform.importer app.yml [-o out.json] [--llm-provider] [--retriever] [--app-id] [--name]`
+- [x] 管理端：`POST /admin/apps/{uuid}/graph/import`（body `{dsl|content, llm_provider, retriever, name, save}`，默认存草稿；应用不存在 404，DSL 非法 400）；`api/schemas.py` 增 `GraphImportRequest`
+- [x] 依赖：`pyproject.toml` 增 `pyyaml>=6.0`（DSL 支持 YAML）
+- [x] 测试：`tests/test_importer.py` 28 项 + `tests/test_admin_api.py` 导入 4 项（节点/边映射、模板与裸表达式改写、条件分支与句柄、工具参数、降级重连、坏 DSL 拒绝、JSON/YAML 解析、导入接口契约），`ruff check` 通过
+
+**未纳入本批**：M3 的独立中台前端（含账号/角色页面）与监控看板；记忆的「可选摘要」。
 
 **环境备注**：本机 Python 3.11.1；依赖已 `pip install -e ".[dev]"`；测试用临时 SQLite（`conftest.py`），生产用 MySQL（`sql/ddl.sql` 人工执行）。
 

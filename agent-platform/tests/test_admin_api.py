@@ -150,3 +150,89 @@ def test_document_crud(api_client):
     assert api_client.delete(f"/admin/documents/{created['uuid']}").json()["data"]["is_deleted"] == 1
     assert api_client.delete(f"/admin/documents/{created['uuid']}").status_code == 404
     assert api_client.get("/admin/documents", params={"tenant_code": "t"}).json()["data"] == []
+
+
+# --------------------------------------------------------------------------- Dify 导入
+
+
+def _dify_dsl():
+    return {
+        "app": {"id": "dify-app", "name": "Dify 应用"},
+        "workflow": {
+            "graph": {
+                "nodes": [
+                    {
+                        "id": "start",
+                        "type": "custom",
+                        "position": {"x": 0, "y": 0},
+                        "data": {"type": "start", "title": "开始", "variables": [{"variable": "query", "type": "text-input"}]},
+                    },
+                    {
+                        "id": "llm_1",
+                        "type": "custom",
+                        "position": {"x": 100, "y": 0},
+                        "data": {"type": "llm", "title": "大模型", "model": {"name": "gpt-4o"}, "prompt_template": []},
+                    },
+                    {
+                        "id": "answer_1",
+                        "type": "custom",
+                        "position": {"x": 200, "y": 0},
+                        "data": {"type": "answer", "title": "回答", "answer": "答：{{#llm_1.text#}}"},
+                    },
+                ],
+                "edges": [
+                    {"id": "e1", "source": "start", "target": "llm_1"},
+                    {"id": "e2", "source": "llm_1", "target": "answer_1"},
+                ],
+            }
+        },
+    }
+
+
+def test_import_graph_from_object_and_save(api_client):
+    created = _create_app(api_client, app_id="app-import")
+    response = api_client.post(f"/admin/apps/{created['uuid']}/graph/import", json={"dsl": _dify_dsl()})
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["saved"] is True
+    assert data["stats"] == {"total": 3, "converted": 3, "degraded": 0}
+    assert data["definition"]["app_id"] == "app-import"
+    assert data["definition"]["name"] == "demo"
+    assert [node["id"] for node in data["definition"]["nodes"]] == ["start1", "llm2", "answer3"]
+
+    draft = api_client.get(f"/admin/apps/{created['uuid']}/graph").json()["data"]["definition"]
+    assert draft["nodes"][2]["id"] == "answer3"
+    assert api_client.post(f"/admin/apps/{created['uuid']}/graph/publish", json={}).status_code == 200
+
+
+def test_import_graph_from_content_without_saving(api_client):
+    import json
+
+    created = _create_app(api_client)
+    response = api_client.post(
+        f"/admin/apps/{created['uuid']}/graph/import",
+        json={"content": json.dumps(_dify_dsl()), "save": False, "name": "覆盖名"},
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["saved"] is False
+    assert data["definition"]["name"] == "覆盖名"
+    assert api_client.get(f"/admin/apps/{created['uuid']}/graph").json()["data"]["definition"] == {}
+
+
+def test_import_graph_reports_degraded_nodes(api_client):
+    created = _create_app(api_client)
+    dsl = _dify_dsl()
+    dsl["workflow"]["graph"]["nodes"].insert(
+        2, {"id": "http_1", "data": {"type": "http-request", "title": "HTTP"}}
+    )
+    data = api_client.post(f"/admin/apps/{created['uuid']}/graph/import", json={"dsl": dsl}).json()["data"]
+    assert data["stats"] == {"total": 4, "converted": 3, "degraded": 1}
+    assert any("http-request" in item for item in data["warnings"])
+
+
+def test_import_graph_rejects_bad_dsl_and_missing_app(api_client):
+    created = _create_app(api_client)
+    bad = api_client.post(f"/admin/apps/{created['uuid']}/graph/import", json={"dsl": {"app": {}}})
+    assert bad.status_code == 400
+    assert api_client.post("/admin/apps/ghost/graph/import", json={"dsl": _dify_dsl()}).status_code == 404
