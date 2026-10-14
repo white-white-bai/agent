@@ -1,5 +1,7 @@
-"""中台管理端 API：应用注册表 / 图草稿-发布-回滚 / 敏感词 / MCP Server / 文档。"""
+"""中台管理端 API：应用注册表 / 图草稿-发布-回滚 / 敏感词 / MCP Server / 文档 / provider。"""
 from __future__ import annotations
+
+from agent_platform.core.config import get_settings
 
 
 def _create_app(api_client, **overrides):
@@ -236,3 +238,47 @@ def test_import_graph_rejects_bad_dsl_and_missing_app(api_client):
     bad = api_client.post(f"/admin/apps/{created['uuid']}/graph/import", json={"dsl": {"app": {}}})
     assert bad.status_code == 400
     assert api_client.post("/admin/apps/ghost/graph/import", json={"dsl": _dify_dsl()}).status_code == 404
+
+
+# --------------------------------------------------------------------------- provider / 护栏配置
+
+
+def test_list_providers_reports_configured_flags(api_client, monkeypatch):
+    monkeypatch.setenv("AP_OPENAI_BASE_URL", "")
+    monkeypatch.setenv("AP_OPENAI_API_KEY", "")
+    get_settings.cache_clear()
+    data = api_client.get("/admin/providers").json()["data"]
+    assert [row["name"] for row in data["llm"]] == ["cloud_gateway", "openai"]
+    assert all(row["configured"] is False for row in data["llm"])
+    assert [row["name"] for row in data["retriever"]] == ["builtin", "light_rag", "knowflow", "knowledge_graph"]
+    assert data["retriever"][0]["configured"] is True
+    assert data["embedding"]["name"] == "hash"
+    assert data["observability"]["configured"] is False
+
+    monkeypatch.setenv("AP_OPENAI_BASE_URL", "http://llm.internal/v1")
+    monkeypatch.setenv("AP_OPENAI_API_KEY", "sk-x")
+    monkeypatch.setenv("AP_KNOWFLOW_BASE_URL", "http://knowflow.internal")
+    monkeypatch.setenv("AP_EMBEDDING_BASE_URL", "http://embed.internal")
+    monkeypatch.setenv("AP_EMBEDDING_MODEL", "bge-m3")
+    get_settings.cache_clear()
+    try:
+        data = api_client.get("/admin/providers").json()["data"]
+        assert data["llm"][1]["configured"] is True and data["llm"][1]["detail"] == "http://llm.internal/v1"
+        assert data["retriever"][2]["configured"] is True and data["retriever"][1]["configured"] is False
+        assert data["embedding"] == {"name": "remote", "configured": True, "detail": "bge-m3"}
+    finally:
+        get_settings.cache_clear()
+
+
+def test_get_guard_config_returns_effective_switches(api_client, monkeypatch):
+    monkeypatch.setenv("AP_GUARD_ENABLED", "false")
+    monkeypatch.setenv("AP_GUARD_MAX_ROUNDS", "5")
+    get_settings.cache_clear()
+    try:
+        data = api_client.get("/admin/guard/config").json()["data"]
+        assert data["enabled"] is False
+        assert data["max_rounds"] == 5
+        assert data["sensitive_enabled"] is False and data["rate_enabled"] is False
+        assert data["default_reply"] == ""
+    finally:
+        get_settings.cache_clear()

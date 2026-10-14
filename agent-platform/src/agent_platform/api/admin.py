@@ -302,6 +302,87 @@ def delete_document_endpoint(document_uuid: str) -> dict[str, Any]:
     return {"data": {"uuid": document_uuid, "is_deleted": 1}}
 
 
+# --------------------------------------------------------------------------- 模型 / 检索 provider
+
+@router.get("/providers", dependencies=[Depends(require_permission("provider:read"))])
+def list_providers() -> dict[str, Any]:
+    settings = get_settings()
+    return {
+        "data": {
+            "llm": [
+                {
+                    "name": "cloud_gateway",
+                    "label": "云智通用大模型调用器",
+                    "configured": bool(settings.cloud_gateway_base_url and settings.cloud_gateway_llm_app_id),
+                    "detail": settings.cloud_gateway_base_url,
+                },
+                {
+                    "name": "openai",
+                    "label": "OpenAI 兼容私有 provider",
+                    "configured": bool(settings.openai_base_url and settings.openai_api_key),
+                    "detail": settings.openai_base_url,
+                },
+            ],
+            "retriever": [
+                {
+                    "name": "builtin",
+                    "label": "内置向量库",
+                    "configured": True,
+                    "detail": f"dim={settings.embedding_dim}",
+                },
+                {
+                    "name": "light_rag",
+                    "label": "LightRAG",
+                    "configured": bool(settings.light_rag_base_url),
+                    "detail": settings.light_rag_base_url,
+                },
+                {
+                    "name": "knowflow",
+                    "label": "知流",
+                    "configured": bool(settings.knowflow_base_url),
+                    "detail": settings.knowflow_base_url,
+                },
+                {
+                    "name": "knowledge_graph",
+                    "label": "知识图谱",
+                    "configured": bool(settings.knowledge_graph_base_url),
+                    "detail": settings.knowledge_graph_base_url,
+                },
+            ],
+            "embedding": {
+                "name": "remote" if settings.embedding_base_url else "hash",
+                "configured": bool(settings.embedding_base_url),
+                "detail": settings.embedding_model or f"dim={settings.embedding_dim}",
+            },
+            "observability": {
+                "name": "langfuse",
+                "configured": bool(settings.langfuse_host and settings.langfuse_public_key),
+                "detail": settings.langfuse_host,
+            },
+        }
+    }
+
+
+# --------------------------------------------------------------------------- 护栏配置（进程级开关，只读）
+
+@router.get("/guard/config", dependencies=[Depends(require_permission("guard:read"))])
+def get_guard_config() -> dict[str, Any]:
+    settings = get_settings()
+    return {
+        "data": {
+            "enabled": settings.guard_enabled,
+            "sensitive_enabled": settings.guard_sensitive_enabled,
+            "quota_enabled": settings.guard_quota_enabled,
+            "rate_enabled": settings.guard_rate_enabled,
+            "round_enabled": settings.guard_round_enabled,
+            "daily_token_quota": settings.guard_daily_token_quota,
+            "rate_per_minute": settings.guard_rate_per_minute,
+            "max_rounds": settings.guard_max_rounds,
+            "default_reply": settings.guard_default_reply,
+        }
+    }
+
+
 # --------------------------------------------------------------------------- 监控看板
 
 @router.get("/metrics/overview", dependencies=[Depends(require_permission("metrics:read"))])
