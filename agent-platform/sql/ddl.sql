@@ -73,6 +73,8 @@ CREATE TABLE IF NOT EXISTS ap_conversation (
     user_id         VARCHAR(64)  NOT NULL DEFAULT '',
     user_name       VARCHAR(128) NOT NULL DEFAULT '',
     name            VARCHAR(255) NOT NULL DEFAULT '',
+    summary         TEXT         NULL,
+    summary_upto_id BIGINT       NOT NULL DEFAULT 0,
     created_at      DATETIME     NOT NULL,
     updated_at      DATETIME     NOT NULL,
     PRIMARY KEY (id),

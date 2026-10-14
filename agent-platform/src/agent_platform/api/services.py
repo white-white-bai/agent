@@ -1,6 +1,7 @@
 """应用 / 图 / 会话 / 消息 / 护栏配置 / 知识库 / MCP 持久化。"""
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
@@ -16,7 +17,15 @@ from agent_platform.domain.models import (
     Message,
     SensitiveWord,
 )
+from agent_platform.engine.context import LLMInvoker
 from agent_platform.graph.schema import GraphDef
+
+logger = logging.getLogger("agent_platform.memory")
+
+SUMMARY_SYSTEM_PROMPT = (
+    "你是会话摘要助手。把给定的历史对话压缩成简洁中文摘要，保留事实、结论、"
+    "未决问题与用户偏好；只输出摘要正文，不要任何额外说明。"
+)
 
 
 def _new_uuid() -> str:
@@ -370,6 +379,95 @@ def load_history(conversation: Conversation, window: int) -> list[dict[str, str]
         {"role": row.role, "content": (row.answer if row.role == "assistant" else row.query) or ""}
         for row in reversed(rows)
     ]
+
+
+def _summarizable_messages(conversation: Conversation, window: int) -> list[Message]:
+    """窗口之外、且尚未纳入摘要的历史消息（正序）。"""
+    with session_scope() as session:
+        recent = (
+            select(Message.id)
+            .where(Message.conversation_uuid == conversation.uuid)
+            .order_by(Message.id.desc())
+            .limit(window)
+        )
+        stmt = (
+            select(Message)
+            .where(
+                Message.conversation_uuid == conversation.uuid,
+                Message.id > (conversation.summary_upto_id or 0),
+                Message.id.not_in(recent),
+            )
+            .order_by(Message.id.asc())
+        )
+        return list(session.scalars(stmt).all())
+
+
+def _render_overflow(messages: list[Message], max_chars: int) -> tuple[str, int]:
+    """渲染待摘要的对话，返回 (文本, 已纳入的最大消息 id)。
+
+    逐条累加，超出 max_chars 即停，剩余部分留待下一轮再压缩，保证不丢消息。
+    """
+    lines: list[str] = []
+    used = 0
+    last_id = 0
+    for row in messages:
+        text = (row.answer if row.role == "assistant" else row.query) or ""
+        if not text:
+            last_id = row.id
+            continue
+        line = f"{row.role}: {text}"
+        if lines and used + len(line) > max_chars:
+            break
+        lines.append(line)
+        used += len(line)
+        last_id = row.id
+    return "\n".join(lines), last_id
+
+
+async def refresh_summary(
+    conversation: Conversation,
+    window: int,
+    invoker: LLMInvoker,
+    *,
+    provider: str,
+    model: str = "",
+    max_chars: int = 4000,
+) -> str:
+    """把窗口之外的历史压缩进会话摘要；无新增可压缩内容时原样返回。"""
+    if window <= 0 or max_chars <= 0:
+        return conversation.summary or ""
+    body, last_id = _render_overflow(_summarizable_messages(conversation, window), max_chars)
+    if not body:
+        return conversation.summary or ""
+    previous = conversation.summary or ""
+    if previous:
+        prompt = f"已有摘要：\n{previous}\n\n新增对话：\n{body}\n\n请输出合并后的完整摘要。"
+    else:
+        prompt = f"新增对话：\n{body}\n\n请输出完整摘要。"
+    try:
+        summary = (
+            await invoker(
+                provider=provider,
+                model=model,
+                system_prompt=SUMMARY_SYSTEM_PROMPT,
+                user_prompt=prompt,
+                temperature=0.2,
+                max_tokens=None,
+            )
+        ).strip()
+    except Exception:
+        logger.warning("会话摘要生成失败，降级为上一轮摘要", exc_info=True)
+        return previous
+    if not summary:
+        return previous
+    with session_scope() as session:
+        row = session.scalar(select(Conversation).where(Conversation.uuid == conversation.uuid))
+        if row is not None:
+            row.summary = summary
+            row.summary_upto_id = last_id
+    conversation.summary = summary
+    conversation.summary_upto_id = last_id
+    return summary
 
 
 def get_message_by_message_id(message_id: str) -> Message | None:

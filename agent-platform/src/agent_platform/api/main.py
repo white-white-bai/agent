@@ -120,7 +120,18 @@ async def _chat_stream(
             slot_held = limiter.enabled
 
         conversation = services.get_or_create_conversation(app_record, request.user, request.conversation_id)
-        history = services.load_history(conversation, get_settings().history_window)
+        settings = get_settings()
+        history = services.load_history(conversation, settings.history_window)
+        summary = ""
+        if settings.history_summary_enabled and settings.history_window > 0:
+            summary = await services.refresh_summary(
+                conversation,
+                settings.history_window,
+                ctx.llm,
+                provider=settings.history_summary_provider,
+                model=settings.history_summary_model,
+                max_chars=settings.history_summary_max_chars,
+            )
         services.save_message(conversation, "user", query=request.query)
         message_id = uuid.uuid4().hex
 
@@ -143,6 +154,8 @@ async def _chat_stream(
         inputs = {**request.inputs, "query": request.query}
         if history:
             inputs["history"] = history
+        if summary:
+            inputs["summary"] = summary
         answer = ""
         resources: list[dict] = []
         try:

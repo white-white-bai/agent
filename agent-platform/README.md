@@ -84,8 +84,9 @@ python -m agent_platform.importer app.yml --llm-provider openai --retriever ligh
 ## 数据库与迁移
 
 ```bash
-mysql -h host -P 3306 -u user -p agent_platform < sql/ddl.sql               # 建表（幂等）
-mysql -h host -P 3306 -u user -p agent_platform < sql/migrate_legacy_app.sql  # 存量 ai_monitor_app 导入
+mysql -h host -P 3306 -u user -p agent_platform < sql/ddl.sql                    # 建表（幂等）
+mysql -h host -P 3306 -u user -p agent_platform < sql/migrate_history_summary.sql # 老库补记忆摘要列（幂等）
+mysql -h host -P 3306 -u user -p agent_platform < sql/migrate_legacy_app.sql      # 存量 ai_monitor_app 导入
 ```
 
 迁移脚本沿用现有 `app_id` / `api_key`，按区域分表逐个设置 `@tenant_code`，可重复执行。
@@ -107,7 +108,15 @@ python -m agent_platform.worker.main
 ## 记忆
 
 `AP_HISTORY_WINDOW` 控制注入图输入的历史消息条数（按会话取最近 N 条，倒序取正序注入 `history` 变量）；
-默认 `0` 表示关闭，此时图输入与改造前完全一致。摘要（summary）未实现。
+默认 `0` 表示关闭，此时图输入与改造前完全一致。
+
+`AP_HISTORY_SUMMARY_ENABLED`（默认 `false`，需同时开启窗口）把窗口之外的历史压缩成摘要，以 `summary`
+变量注入图输入，供提示词长期记忆用：摘要落在 `ap_conversation.summary` + `summary_upto_id` 水位线，
+每轮只压缩水位线之后、窗口之外的新增消息并与上一轮摘要合并，失败（模型不可用 / 空回复）静默降级为上一轮摘要，
+不阻断对话。`AP_HISTORY_SUMMARY_MAX_CHARS` 限制单轮送入模型的字符数，超出部分留待下一轮，不会丢消息；
+生成用 `AP_HISTORY_SUMMARY_PROVIDER` / `AP_HISTORY_SUMMARY_MODEL`，temperature 取 0.2。
+
+老库需执行 `sql/migrate_history_summary.sql` 补列（幂等），新建库直接用 `sql/ddl.sql`。
 
 ## 幂等与并发（默认关闭）
 

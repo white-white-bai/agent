@@ -61,6 +61,11 @@ class Settings(BaseSettings):
 
     # 记忆：窗口条数（0 关闭，历史以 history 变量注入图输入）
     history_window: int = 0
+    # 记忆：窗口之外的历史压缩为 summary 变量注入（依赖 window 开启；调用模型失败时降级为仅窗口）
+    history_summary_enabled: bool = False
+    history_summary_provider: str = "cloud_gateway"
+    history_summary_model: str = ""
+    history_summary_max_chars: int = 4000
 
     # 幂等 / 并发
     idempotency_ttl_seconds: int = 600

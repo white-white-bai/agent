@@ -100,7 +100,8 @@
 - [x] **模型适配器**：云智「通用大模型调用器」自定义 ChatModel + OpenAI 兼容私有 provider。
 - [x] **知识适配器**：内置向量库 Retriever + 外接（知流/LightRAG/知识图谱）Retriever。
 - [x] **MCP**：内置 HTTP→MCP 桥（托管 MCP Server）+ MCP Client 接入。
-- [x] **记忆**：窗口已实现（`AP_HISTORY_WINDOW`，历史以 `history` 变量注入图输入）；**可选摘要**未实现（本条原文标注「可选」）。
+- [x] **记忆**：窗口已实现（`AP_HISTORY_WINDOW`，历史以 `history` 变量注入图输入）；**可选摘要**已实现
+  （`AP_HISTORY_SUMMARY_ENABLED`，窗口之外的历史压缩为 `summary` 变量注入，见「M1 续批（2026-10-14）· 记忆摘要」）。
 
 ### M2 兼容与集成
 - [x] **两层兼容接口**：云智封装层（`/api/oauth2/token`、`/api/transfer/one/*`、`/api/open/dify/*`）+ 原始 Dify `/v1/*`。
@@ -200,6 +201,20 @@
 - [x] 内网冒烟：`scripts/smoke_e2e.py`（真 MySQL + 真云智网关 + 真实模型：建表 → 注册/复用应用 → 发布图 → 打原始 Dify 与云智两条链路 → 断言 SSE 事件序列与各 Envelope 形状，含工作流三重嵌套）
 - [x] 测试：`tests/test_idempotency.py`、`tests/test_concurrency.py` 共 23 项（单测 + API 契约），全套 222 项全绿，`ruff check` 通过
 
+**M1 续批（2026-10-14）· 记忆摘要**：决策 8「窗口 + 可选摘要」的摘要部分已完成并覆盖测试。
+
+- [x] 模型与建表：`domain/models.py` 的 `Conversation` 增 `summary` / `summary_upto_id`；`sql/ddl.sql` 同步建表，
+  另附 `sql/migrate_history_summary.sql`（存在即跳过，老库幂等补列）
+- [x] 配置：`AP_HISTORY_SUMMARY_ENABLED`（默认 `false`，需同时开启窗口）、`AP_HISTORY_SUMMARY_PROVIDER`（默认
+  `cloud_gateway`）、`AP_HISTORY_SUMMARY_MODEL`、`AP_HISTORY_SUMMARY_MAX_CHARS`（默认 4000）
+- [x] 摘要：`api/services.refresh_summary`（取窗口之外且在水位线之后的消息，与上一轮摘要合并后重新压缩；
+  水位线随摘要落 `ap_conversation`，无新增可压缩内容时不调用模型）
+- [x] 降级：模型不可用 / 空回复时返回上一轮摘要并保持水位线不动，不阻断对话；`max_chars` 逐条累加截断，
+  超出部分留待下一轮，不丢消息
+- [x] 接入：`api/main.py`（`summary` 变量注入图输入，默认关闭时图输入与改造前逐字节一致）
+- [x] 测试：`tests/test_history_summary.py` 9 项（关闭窗口短路、无溢出短路、溢出压缩与水位线、增量合并、
+  截断不丢消息、模型失败与空回复降级、接口注入与默认关闭），`ruff check` 通过
+
 **M3 续批（2026-10-14）· 账号**：独立账号体系后端已完成并覆盖测试。
 
 - [x] 模型与建表：`domain/models.py` 增 `AdminRole` / `AdminUser`；`sql/ddl.sql` 增 `ap_admin_role` / `ap_admin_user`（幂等 DDL，人工执行）
@@ -241,7 +256,7 @@
 - [x] 缺陷修复：`NodeInspector` / `RowsEditor` 克隆前先 `toRaw` —— `structuredClone` 不接受 Vue 响应式代理，选中节点或增删行时必抛 `DataCloneError`
 - [x] 测试：`tests/` 10 个文件 150 项全绿（client/api/nodeMeta/mapper/guard/chart/useTable/auth 纯逻辑单测 + 组件挂载 + 各视图冒烟）；`npm run lint` 无告警，`npm run build` 通过。X6 画布与图编辑器依赖真实画布与路由参数，不做挂载测试，其可测逻辑已下沉至 `mapper.js`
 
-**未纳入本批**：记忆的「可选摘要」。
+**未纳入本批**：无（决策清单的 M1～M4 各项均已交付）。
 
 **环境备注**：本机 Python 3.11.1；依赖已 `pip install -e ".[dev]"`；测试用临时 SQLite（`conftest.py`），生产用 MySQL（`sql/ddl.sql` 人工执行）。
 

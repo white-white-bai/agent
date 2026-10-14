@@ -80,6 +80,8 @@ class Conversation(Base):
     user_id: Mapped[str] = mapped_column(String(64), default="")
     user_name: Mapped[str] = mapped_column(String(128), default="")
     name: Mapped[str] = mapped_column(String(255), default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    summary_upto_id: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
