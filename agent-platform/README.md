@@ -198,8 +198,37 @@ python -m venv .venv && . .venv/Scripts/activate   # Windows
 pip install -e ".[dev]"
 cp .env.example .env
 pytest
-uvicorn agent_platform.api.main:app --reload --port 8900
+
+# 依赖外部实例：先在 .env 填好 AP_DB_DSN（MySQL）、AP_REDIS_URL，再启动
+python -m uvicorn agent_platform.api.main:app --reload --host 127.0.0.1 --port 8900
 ```
+
+不接外部依赖、只跑本地演示时，把 DSN 指向文件库即可跑通全链路（建表由启动时的 `init_db()` 完成，
+`sql/ddl.sql` 无需手工执行）：
+
+```bash
+# .env
+AP_ENV=dev
+AP_HTTP_PORT=8900
+AP_DB_DSN=sqlite+pysqlite:///./.run/agent_platform.db
+AP_DEFAULT_TENANT=changzhou
+
+python -m uvicorn agent_platform.api.main:app --reload --host 127.0.0.1 --port 8900
+```
+
+健康检查与对话入口（两条路由叠在同一 handler 上，鉴权用 `Api-Key` 头或 `Authorization`）：
+
+```bash
+curl -s http://127.0.0.1:8900/healthz                        # {"status":"ok"}
+curl -s -X POST http://127.0.0.1:8900/v1/chat-messages \
+  -H 'Api-Key: <api_key>' -H 'Content-Type: application/json' \
+  --data-binary @payload.json                                # {"query":"...","user":"u","response_mode":"streaming"}
+```
+
+Windows 下 `curl -d` 直接传非 ASCII 体会被控制台编码破坏，请求体写成 UTF-8 文件用 `--data-binary @file`。
+
+管理端为独立前端 `../agent-platform-ui`，`npm run dev` 在 5199 起 Vite 并把 `/admin` `/v1` `/api` `/healthz`
+代理到 `AP_UI_PROXY_TARGET`（默认 `http://127.0.0.1:8900`）。
 
 ## 内网冒烟
 

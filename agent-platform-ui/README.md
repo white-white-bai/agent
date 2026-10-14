@@ -25,13 +25,15 @@ agent 中台的独立管理端。Vue 3 + Vite + Element Plus + Pinia + vue-route
 
 ```bash
 npm install --registry=https://registry.npmmirror.com   # 公司 nexus 不可达时需显式指定源
-npm run dev      # 开发服务器，默认 http://127.0.0.1:5199
+npm run dev      # 开发服务器，http://localhost:5199
 npm run lint     # eslint（flat config）
 npm test         # vitest run
 npm run build    # 产物输出到 dist/
 ```
 
-`npm run dev` 会把 `/admin`、`/v1`、`/api`、`/healthz` 代理到后端，目标地址由 `AP_UI_PROXY_TARGET` 控制，默认 `http://127.0.0.1:8900`。
+`npm run dev` 会把 `/admin`、`/v1`、`/api`、`/healthz` 代理到后端，目标地址由 `AP_UI_PROXY_TARGET` 控制，默认 `http://127.0.0.1:8900`。启动前端前需先起后端（见 `../agent-platform/README.md` 的「本地运行」），否则代理接口 502。
+
+Vite 默认只监听 `localhost`（IPv6 `::1`），浏览器请用 `http://localhost:5199`；`127.0.0.1:5199` 会连不上。
 
 ## 目录
 
