@@ -130,7 +130,7 @@ python -m agent_platform.worker.main
 - **口令**：PBKDF2-HMAC-SHA256（20 万轮）+ 每账号随机 16 字节盐，单向存储；SM4 可逆，不用于口令。
 - **令牌**：复用兼容层 JWT 签名，额外带 `typ=admin` 与角色/租户声明。云智 `client_credentials` 令牌与
   管理端令牌互不冒充：前者过不了 `/admin` 的 `typ` 校验，后者在兼容链路查不到 app `api_key`。
-- **角色**：内置 `admin`（`*`）、`editor`（读写应用/图/护栏/MCP/知识库 + 看板只读）、`viewer`（只读，含看板），可自建 / 删除自建角色，
+- **角色**：内置 `admin`（`*`）、`editor`（读写应用/图/护栏/MCP/知识库 + 看板与 provider 只读）、`viewer`（只读，含看板与 provider），可自建 / 删除自建角色，
   内置角色不可删。权限点形如 `app:read`、`graph:write`，路由级 `require_permission(...)` 校验。
 - **租户隔离**：账号绑定 `tenant_code` 后，列表/新增接口只能看到与写入本租户数据（`scope_tenant`）；
   未绑定（空）表示全局，与改造前一致。
@@ -165,6 +165,15 @@ curl localhost:8900/admin/apps -H "Authorization: Bearer <token>"
 - 错误事件写在 `ap_metric_event`：对话链路抛异常时由 `core/metrics.record_error` 落一条 `kind=error`（旁路写入，
   失败不影响主流程），不落 assistant 消息，故不影响会话/消息分页等既有兼容输出。
 - 序列按天零填充（缺数据的日期补 0），可直接画图；租户维度由账号 `scope_tenant` 收口。
+
+## provider 与护栏配置（只读）
+
+供管理端展示，不落库、不可改（改配置走 `.env`）：
+
+- `GET /admin/providers`（权限点 `provider:read`）：返回 `llm` / `retriever` / `embedding` / `observability`
+  四类的 `{name, label, configured, detail}`，`configured` 由当前 settings 是否配齐凭据推导。
+- `GET /admin/guard/config`（权限点 `guard:read`）：返回进程级护栏开关与阈值（总开关、敏感词、额度、频率、轮数、
+  日 token 配额、每分钟速率、最大轮数、默认回复）。
 
 ## 观测
 

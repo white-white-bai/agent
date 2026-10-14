@@ -112,7 +112,7 @@
   可配排队 `AP_CONCURRENCY_WAIT_SECONDS`）已接线，均默认关闭，行为与改造前一致。
 
 ### M3 管理与观测
-- [ ] **独立中台前端**：agent 列表、图编辑器（AntV X6）、模型/工具(MCP)/知识库/provider 配置、账号/角色、护栏配置。
+- [x] **独立中台前端**：agent 列表、图编辑器（AntV X6）、模型/工具(MCP)/知识库/provider 配置、账号/角色、护栏配置。见「M3 续批（2026-10-14）· 独立中台前端」。
 - [x] **监控看板**：会话量/满意度/token/错误率（中台 MySQL + Langfuse 汇总）。
 - [x] **Langfuse 自托管**集成：节点级 trace 上报。
 - [x] **独立账号体系（后端）**：种子管理员 + 自管理角色/权限；租户维度隔离。见「M3 续批（2026-10-14）· 账号」。
@@ -231,7 +231,17 @@
 - [x] 测试：`tests/test_metrics.py` 11 项（空态零填充、聚合与比率、天数窗口收敛、租户/应用收口、错误事件落库与截断、
   存储失败吞掉、接口 Envelope/401/租户隔离、链路异常埋点端到端），`ruff check` 通过
 
-**未纳入本批**：M3 的独立中台前端（含账号/角色页面与看图表的页面）；记忆的「可选摘要」。
+**M3 续批（2026-10-14）· 独立中台前端**：`agent-platform-ui/` 独立工程（Vue 3.4 + Element Plus 2.7 + Vite 5.4 + Pinia + vue-router 4.4 + AntV X6 2.18），只消费既有 `/admin` 协议，不改动 Java 后端与前端源码。
+
+- [x] 工程骨架：`package.json` / `vite.config.js`（`AP_UI_PROXY_TARGET` 默认 `http://127.0.0.1:8900`，代理 `/admin`、`/v1`、`/api`、`/healthz`）/ `eslint.config.js`（flat config）/ `README.md`
+- [x] 接口与鉴权：`api/client.js`（token 读写、`{data}` Envelope 解包、401 统一登出、FastAPI `detail` 字符串/422 数组归一为可读信息）+ `api/index.js`（全部管理接口）+ `stores/auth.js`（`can()` 通配权限）+ `router/guard.js`（未登录跳 `/login?redirect=`，越权落 `/403`）
+- [x] 页面：登录、应用注册（`AppsView`）、图编辑器（`GraphEditorView`：X6 画布、节点面板/检查器、草稿保存、发布、版本回滚、Dify DSL 导入与降级提示）、模型与检索（`ProvidersView`）、MCP 工具、知识库、护栏配置、账号与角色、监控看板（会话/消息/满意度/token/异常五类卡片 + 三张趋势图）、403
+- [x] 图映射：`graph/nodeMeta.js`（9 类节点元数据与默认 config）+ `graph/mapper.js`（图定义 ⇄ X6 cell 纯函数映射，后端 snake_case 原样保留）
+- [x] 后端配套：`GET /admin/providers`（四类 provider 配置态）、`GET /admin/guard/config`（进程级护栏开关与阈值，只读）；内置 `editor`/`viewer` 角色补 `provider:read`
+- [x] 缺陷修复：`NodeInspector` / `RowsEditor` 克隆前先 `toRaw` —— `structuredClone` 不接受 Vue 响应式代理，选中节点或增删行时必抛 `DataCloneError`
+- [x] 测试：`tests/` 10 个文件 150 项全绿（client/api/nodeMeta/mapper/guard/chart/useTable/auth 纯逻辑单测 + 组件挂载 + 各视图冒烟）；`npm run lint` 无告警，`npm run build` 通过。X6 画布与图编辑器依赖真实画布与路由参数，不做挂载测试，其可测逻辑已下沉至 `mapper.js`
+
+**未纳入本批**：记忆的「可选摘要」。
 
 **环境备注**：本机 Python 3.11.1；依赖已 `pip install -e ".[dev]"`；测试用临时 SQLite（`conftest.py`），生产用 MySQL（`sql/ddl.sql` 人工执行）。
 
