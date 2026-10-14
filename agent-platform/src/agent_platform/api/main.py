@@ -42,7 +42,6 @@ app = FastAPI(title="agent-platform", version="0.1.0", lifespan=lifespan)
 app.include_router(admin.router)
 app.include_router(accounts.router)
 app.include_router(compat_api.router)
-app.include_router(compat_api.router)
 
 
 @app.get("/healthz")
