@@ -21,6 +21,8 @@ _RUNNERS: dict[NodeType, Callable] = {
     NodeType.TOOL: nodes.run_tool,
     NodeType.AGGREGATE: nodes.run_aggregate,
     NodeType.ANSWER: nodes.run_answer,
+    NodeType.PARAMETER_EXTRACTOR: nodes.run_parameter_extractor,
+    NodeType.TEMPLATE_TRANSFORM: nodes.run_template_transform,
 }
 
 
@@ -33,7 +35,7 @@ def _node_fn(node: NodeDef, ctx: EngineContext) -> Callable[[GraphState], Any]:
     runner = _RUNNERS[node.type]
     tracer = _tracer(ctx)
 
-    if node.type in (NodeType.LLM, NodeType.KNOWLEDGE, NodeType.TOOL):
+    if node.type in (NodeType.LLM, NodeType.KNOWLEDGE, NodeType.TOOL, NodeType.PARAMETER_EXTRACTOR):
 
         async def afn(state: GraphState) -> GraphState:
             if tracer is None:

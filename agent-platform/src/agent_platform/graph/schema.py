@@ -36,6 +36,8 @@ class NodeType(str, Enum):
     TOOL = "tool"
     AGGREGATE = "aggregate"
     ANSWER = "answer"
+    PARAMETER_EXTRACTOR = "parameter-extractor"
+    TEMPLATE_TRANSFORM = "template-transform"
 
 
 class Position(BaseModel):
@@ -52,8 +54,8 @@ class EndConfig(BaseModel):
 
 
 class LLMConfig(BaseModel):
-    provider: Literal["cloud_gateway", "openai"] = "cloud_gateway"
-    model: str = ""
+    # provider 为 AP_LLM_MODELS 里的模型条目 key；留空用清单第一个
+    provider: str = ""
     system_prompt: str = ""
     user_prompt: str = "{{ query }}"
     temperature: float = 0.7
@@ -113,6 +115,44 @@ class AnswerConfig(BaseModel):
     output_var: str = "answer"
 
 
+class ExtractorParameter(BaseModel):
+    """参数提取器的单个输出参数定义。"""
+
+    name: str
+    type: str = "string"
+    description: str = ""
+    required: bool = False
+    options: list[str] = Field(default_factory=list)
+
+    @field_validator("required", mode="before")
+    @classmethod
+    def _coerce_required(cls, value: Any) -> bool:
+        # 前端 rows 表单可能传字符串，bool("false") is True 的坑需在此挡掉
+        if isinstance(value, str):
+            return value.strip().lower() in ("true", "1", "yes", "on")
+        return bool(value)
+
+
+class ParameterExtractorConfig(BaseModel):
+    """参数提取器配置：LLM 结构化提取，输出按参数名平铺（含 __is_success / __reason）。"""
+
+    provider: str = ""
+    query: str = "{{ query }}"
+    instruction: str = ""
+    parameters: list[ExtractorParameter] = Field(default_factory=list)
+    temperature: float = 0.7
+    max_tokens: int | None = None
+    output_var: str = "extracted"
+
+
+class TemplateTransformConfig(BaseModel):
+    """模板转换配置：本地变量名绑定 + Jinja2 模板渲染，输出固定为字符串。"""
+
+    variables: list[CodeInput] = Field(default_factory=list)
+    template: str = ""
+    output_var: str = "output"
+
+
 CONFIG_MODELS: dict[NodeType, type[BaseModel]] = {
     NodeType.START: StartConfig,
     NodeType.END: EndConfig,
@@ -123,6 +163,8 @@ CONFIG_MODELS: dict[NodeType, type[BaseModel]] = {
     NodeType.TOOL: ToolConfig,
     NodeType.AGGREGATE: AggregateConfig,
     NodeType.ANSWER: AnswerConfig,
+    NodeType.PARAMETER_EXTRACTOR: ParameterExtractorConfig,
+    NodeType.TEMPLATE_TRANSFORM: TemplateTransformConfig,
 }
 
 

@@ -54,7 +54,7 @@ def _fresh_db():
 
 
 class FakeLLM:
-    async def __call__(self, *, provider, model, system_prompt, user_prompt, temperature, max_tokens):
+    async def __call__(self, *, provider, system_prompt, user_prompt, temperature, max_tokens):
         return f"echo:{user_prompt}"
 
 

@@ -453,7 +453,6 @@ async def refresh_summary(
     invoker: LLMInvoker,
     *,
     provider: str,
-    model: str = "",
     max_chars: int = 4000,
 ) -> str:
     """把窗口之外的历史压缩进会话摘要；无新增可压缩内容时原样返回。"""
@@ -471,7 +470,6 @@ async def refresh_summary(
         summary = (
             await invoker(
                 provider=provider,
-                model=model,
                 system_prompt=SUMMARY_SYSTEM_PROMPT,
                 user_prompt=prompt,
                 temperature=0.2,

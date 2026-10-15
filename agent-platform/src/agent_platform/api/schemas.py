@@ -130,7 +130,7 @@ class GraphRollbackRequest(BaseModel):
 class GraphImportRequest(BaseModel):
     dsl: dict[str, Any] | None = None
     content: str = ""
-    llm_provider: str = "cloud_gateway"
+    llm_provider: str = ""
     retriever: str = "builtin"
     name: str = ""
     save: bool = True

@@ -1,7 +1,8 @@
 """Dify DSL → 中台图 schema 导入器。
 
-可映射节点：start / end / llm / knowledge-retrieval / if-else / code / tool / variable-aggregator / answer；
-其余节点（http-request、template-transform、iteration、question-classifier 等）旁路并给出提示。
+可映射节点：start / end / llm / knowledge-retrieval / if-else / code / tool / variable-aggregator / answer /
+parameter-extractor / template-transform；
+其余节点（http-request、iteration、question-classifier 等）旁路并给出提示。
 引用 `{{#node.var#}}` 按节点输出重写为中台变量名；条件分支以 Dify 边的 sourceHandle 作为分支 id
 （与 `engine.builder._condition_paths` 的 route_map 键一致）。
 """
@@ -30,6 +31,8 @@ _DIFY_TO_MIDDLE: dict[str, NodeType] = {
     "tool": NodeType.TOOL,
     "variable-aggregator": NodeType.AGGREGATE,
     "answer": NodeType.ANSWER,
+    "parameter-extractor": NodeType.PARAMETER_EXTRACTOR,
+    "template-transform": NodeType.TEMPLATE_TRANSFORM,
 }
 
 _ID_PREFIX: dict[NodeType, str] = {
@@ -42,6 +45,8 @@ _ID_PREFIX: dict[NodeType, str] = {
     NodeType.TOOL: "tool",
     NodeType.AGGREGATE: "aggregate",
     NodeType.ANSWER: "answer",
+    NodeType.PARAMETER_EXTRACTOR: "extract",
+    NodeType.TEMPLATE_TRANSFORM: "tpl",
 }
 
 _INPUT_TYPES: dict[str, VarType] = {
@@ -60,6 +65,7 @@ _SINGLE_OUTPUT: dict[NodeType, set[str]] = {
     NodeType.TOOL: {"text", "files", "json"},
     NodeType.ANSWER: {"answer"},
     NodeType.AGGREGATE: {"output"},
+    NodeType.TEMPLATE_TRANSFORM: {"output"},
 }
 
 _OPERATORS: dict[str, str] = {
@@ -185,7 +191,7 @@ class _Converter:
         ntype = self.type_map[head]
         if ntype is NodeType.START:
             return tail
-        if ntype is NodeType.CODE:
+        if ntype in (NodeType.CODE, NodeType.PARAMETER_EXTRACTOR):
             return f"{our_id}.{tail}"
         if ntype is NodeType.END:
             self.warn(f"end 节点 {head} 无输出变量，引用 {tail} 已保留原名")
@@ -295,6 +301,10 @@ class _Converter:
             return self._tool_config(our_id, dify_id, data)
         if ntype is NodeType.AGGREGATE:
             return self._aggregate_config(our_id, data)
+        if ntype is NodeType.PARAMETER_EXTRACTOR:
+            return self._extractor_config(our_id, dify_id, data)
+        if ntype is NodeType.TEMPLATE_TRANSFORM:
+            return self._template_config(our_id, data)
         return self._answer_config(our_id, data)
 
     def _start_config(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -333,7 +343,7 @@ class _Converter:
         model = data.get("model") if isinstance(data.get("model"), dict) else {}
         params = model.get("completion_params") if isinstance(model.get("completion_params"), dict) else {}
         if model.get("provider"):
-            self.warn(f"Dify 模型 provider 不直接映射，LLM 节点统一使用 {self.llm_provider}（模型名沿用 model.name）")
+            self.warn(f"Dify 模型 provider 不直接映射，LLM 节点统一使用 {self.llm_provider or '默认模型'}（模型与地址取自 AP_LLM_MODELS 对应条目）")
         extra = self._context_ref(data)
         system_parts: list[str] = []
         user_parts: list[str] = []
@@ -351,7 +361,6 @@ class _Converter:
         max_tokens = params.get("max_tokens")
         return {
             "provider": self.llm_provider,
-            "model": str(model.get("name") or ""),
             "system_prompt": "\n\n".join(system_parts),
             "user_prompt": "\n\n".join(user_parts) or "{{ query }}",
             "temperature": float(params.get("temperature") or 0.7),
@@ -481,6 +490,69 @@ class _Converter:
         variables = [self._selector(item) for item in (data.get("variables") or [])]
         return {"variables": [item for item in variables if item], "output_var": our_id}
 
+    def _extractor_config(self, our_id: str, dify_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        model = data.get("model") if isinstance(data.get("model"), dict) else {}
+        params = model.get("completion_params") if isinstance(model.get("completion_params"), dict) else {}
+        if model.get("provider"):
+            self.warn(f"Dify 模型 provider 不直接映射，LLM 节点统一使用 {self.llm_provider or '默认模型'}（模型与地址取自 AP_LLM_MODELS 对应条目）")
+        if str(data.get("reasoning_mode") or "") == "function_call":
+            self.warn(f"节点 {dify_id} 提取模式 function_call 不支持，已退化为 prompt 模式")
+        memory = data.get("memory")
+        if isinstance(memory, dict) and isinstance(memory.get("window"), dict) and memory["window"].get("enabled"):
+            self.warn(f"节点 {dify_id} 的记忆窗口未导入，已忽略")
+        raw_query = data.get("query")
+        if isinstance(raw_query, (list, tuple)):
+            expression = self._selector(raw_query)
+            query = f"{{{{ {expression} }}}}" if expression else "{{ query }}"
+        else:
+            query = self._template(raw_query) or "{{ query }}"
+        parameters: list[dict[str, Any]] = []
+        for item in data.get("parameters") or []:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "")
+            if not name:
+                continue
+            parameters.append(
+                {
+                    "name": name,
+                    "type": str(item.get("type") or "string"),
+                    "description": str(item.get("description") or ""),
+                    "required": bool(item.get("required")),
+                    "options": [str(option) for option in (item.get("options") or [])],
+                }
+            )
+        max_tokens = params.get("max_tokens")
+        return {
+            "provider": self.llm_provider,
+            "query": query,
+            "instruction": self._template(data.get("instruction")),
+            "parameters": parameters,
+            "temperature": float(params.get("temperature") or 0.7),
+            "max_tokens": int(max_tokens) if max_tokens else None,
+            "output_var": our_id,
+        }
+
+    def _template_config(self, our_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        # Dify 模板用本地变量名 {{ arg1 }}，先把变量绑定重写进 extra，{{#...#}} 引用才不会悬空
+        inputs: list[dict[str, str]] = []
+        extra: dict[str, str] = {}
+        for item in data.get("variables") or []:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("variable") or "")
+            expression = self._selector(item.get("value_selector"))
+            if name and expression:
+                inputs.append({"name": name, "expression": expression})
+                extra[name] = expression
+            elif name:
+                self.warn(f"模板转换入参 {name} 缺少取值表达式，已忽略")
+        return {
+            "variables": inputs,
+            "template": self._template(data.get("template"), extra),
+            "output_var": our_id,
+        }
+
     def _answer_config(self, our_id: str, data: dict[str, Any]) -> dict[str, Any]:
         return {"template": self._template(data.get("answer")), "output_var": our_id}
 
@@ -592,12 +664,10 @@ def convert(
     *,
     app_id: str = "",
     name: str = "",
-    llm_provider: str = "cloud_gateway",
+    llm_provider: str = "",
     retriever: str = "builtin",
 ) -> ImportResult:
-    """Dify DSL → 中台图定义。llm_provider / retriever 为导入后统一切换的适配器名。"""
-    if llm_provider not in ("cloud_gateway", "openai"):
-        raise DifyImportError(f"不支持的 llm_provider: {llm_provider}")
+    """Dify DSL → 中台图定义。llm_provider 为 AP_LLM_MODELS 的模型条目 key（留空用默认），retriever 为检索器名。"""
     if retriever not in ("builtin", "light_rag", "knowflow", "knowledge_graph"):
         raise DifyImportError(f"不支持的 retriever: {retriever}")
     graph = _extract_graph(dsl)

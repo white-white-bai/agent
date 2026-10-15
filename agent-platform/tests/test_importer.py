@@ -88,8 +88,7 @@ def test_convert_llm_config_defaults():
     result = convert(BASIC)
     graph = GraphDef.model_validate(result.definition)
     llm = graph.node("llm2").typed_config()
-    assert llm.provider == "cloud_gateway"
-    assert llm.model == "gpt-4o"
+    assert llm.provider == ""
     assert llm.output_var == "llm2"
     assert llm.user_prompt == "{{ query }}"
     assert llm.temperature == 0.7
@@ -363,6 +362,72 @@ def test_convert_aggregate_node():
     assert aggregate.output_var == "aggregate2"
 
 
+def test_convert_parameter_extractor_node():
+    dsl = _dsl(
+        nodes=[
+            _node("start", "start", {"variables": []}),
+            _node(
+                "pe",
+                "parameter-extractor",
+                {
+                    "model": {"provider": "openai", "name": "gpt-4o", "completion_params": {"temperature": 0.1}},
+                    "query": ["sys", "query"],
+                    "instruction": "从 {{#start.topic#}} 提取",
+                    "parameters": [
+                        {"name": "region", "type": "string", "required": True, "description": "区域"},
+                        {"name": "intention", "type": "select", "options": ["购票", "置换"]},
+                    ],
+                    "reasoning_mode": "function_call",
+                },
+            ),
+            _node("answer_1", "answer", {"answer": "{{#pe.region#}}"}),
+        ],
+        edges=[_edge("start", "pe"), _edge("pe", "answer_1")],
+    )
+    result = convert(dsl)
+    graph = GraphDef.model_validate(result.definition)
+    assert graph.node("extract2") is not None
+    extractor = graph.node("extract2").typed_config()
+    assert extractor.provider == ""
+    assert extractor.query == "{{ query }}"
+    assert [item.name for item in extractor.parameters] == ["region", "intention"]
+    assert extractor.parameters[0].required is True
+    assert extractor.parameters[1].options == ["购票", "置换"]
+    assert extractor.output_var == "extract2"
+    # 下游引用按参数名平铺到 extract2.<name>
+    assert graph.node("answer3").typed_config().template == "{{ extract2.region }}"
+    assert not any("旁路" in item for item in result.warnings)
+    assert any("function_call" in item for item in result.warnings)
+
+
+def test_convert_template_transform_node_binds_local_variables():
+    dsl = _dsl(
+        nodes=[
+            _node("start", "start", {"variables": []}),
+            _node("llm_1", "llm", {"model": {"name": "m"}, "prompt_template": []}),
+            _node(
+                "tpl",
+                "template-transform",
+                {
+                    "variables": [{"variable": "text", "value_selector": ["llm_1", "text"]}],
+                    "template": "结论：{{ text }}",
+                },
+            ),
+            _node("answer_1", "answer", {"answer": "{{#tpl.output#}}"}),
+        ],
+        edges=[_edge("start", "llm_1"), _edge("llm_1", "tpl"), _edge("tpl", "answer_1")],
+    )
+    result = convert(dsl)
+    graph = GraphDef.model_validate(result.definition)
+    assert graph.node("tpl3") is not None
+    template = graph.node("tpl3").typed_config()
+    assert [item.model_dump() for item in template.variables] == [{"name": "text", "expression": "llm2"}]
+    assert template.template == "结论：{{ text }}"
+    assert template.output_var == "tpl3"
+    assert graph.node("answer4").typed_config().template == "{{ tpl3 }}"
+    assert not any("旁路" in item for item in result.warnings)
+
+
 def test_convert_degraded_node_rewires_edges():
     dsl = _dsl(
         nodes=[
@@ -384,11 +449,11 @@ def test_convert_degraded_chain_rewires_transitively():
     dsl = _dsl(
         nodes=[
             _node("start", "start", {"variables": []}),
-            _node("tpl", "template-transform", {}),
+            _node("qc", "question-classifier", {}),
             _node("http_1", "http-request", {}),
             _node("answer_1", "answer", {"answer": "完"}),
         ],
-        edges=[_edge("start", "tpl"), _edge("tpl", "http_1"), _edge("http_1", "answer_1")],
+        edges=[_edge("start", "qc"), _edge("qc", "http_1"), _edge("http_1", "answer_1")],
     )
     graph = GraphDef.model_validate(convert(dsl).definition)
     assert [(edge.source, edge.target) for edge in graph.edges] == [("start1", "answer4")]
@@ -428,8 +493,8 @@ def test_convert_warns_when_start_node_missing():
 
 
 def test_convert_rejects_unknown_adapters():
-    with pytest.raises(DifyImportError):
-        convert(BASIC, llm_provider="anthropic")
+    # llm_provider 现在是 AP_LLM_MODELS 的任意条目 key，不再做枚举校验；retriever 仍校验
+    assert convert(BASIC, llm_provider="deepseek").definition
     with pytest.raises(DifyImportError):
         convert(BASIC, retriever="milvus")
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { NODE_TYPES, conditionPorts, createNode, defaultConfig, nodeMeta } from '@/graph/nodeMeta'
 
-const EXPECTED_TYPES = ['start', 'end', 'llm', 'knowledge', 'condition', 'code', 'tool', 'aggregate', 'answer']
+const EXPECTED_TYPES = ['start', 'end', 'llm', 'knowledge', 'condition', 'code', 'tool', 'aggregate', 'answer', 'parameter-extractor', 'template-transform']
 
 describe('NODE_TYPES catalogue', () => {
   it('mirrors the backend NodeType enum', () => {
@@ -20,7 +20,7 @@ describe('NODE_TYPES catalogue', () => {
   })
 
   it('only references known field kinds', () => {
-    const kinds = new Set(['text', 'textarea', 'number', 'select', 'keyvalue', 'stringlist', 'rows'])
+    const kinds = new Set(['text', 'textarea', 'number', 'select', 'model-select', 'keyvalue', 'stringlist', 'rows'])
     NODE_TYPES.forEach((meta) => {
       meta.fields.forEach((field) => {
         expect(kinds.has(field.kind)).toBe(true)
@@ -56,8 +56,8 @@ describe('defaultConfig', () => {
     expect(second.branches).toHaveLength(1)
   })
 
-  it('seeds the llm node with a cloud_gateway provider', () => {
-    expect(defaultConfig('llm')).toMatchObject({ provider: 'cloud_gateway', temperature: 0.7, output_var: 'text' })
+  it('seeds the llm node with an empty provider (falls back to the first configured model)', () => {
+    expect(defaultConfig('llm')).toMatchObject({ provider: '', temperature: 0.7, output_var: 'text' })
   })
 })
 

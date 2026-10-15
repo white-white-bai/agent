@@ -133,7 +133,7 @@ async def test_graph_batch_run_runs_published_graph(seed_app, monkeypatch):
 
 
 class FakeLLM:
-    async def __call__(self, *, provider, model, system_prompt, user_prompt, temperature, max_tokens):
+    async def __call__(self, *, provider, system_prompt, user_prompt, temperature, max_tokens):
         return f"echo:{user_prompt}"
 
 

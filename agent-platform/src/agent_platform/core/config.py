@@ -15,13 +15,9 @@ class Settings(BaseSettings):
 
     default_tenant: str = "changzhou"
 
-    cloud_gateway_base_url: str = ""
-    cloud_gateway_client_id: str = ""
-    cloud_gateway_client_secret: str = ""
-    cloud_gateway_llm_app_id: str = ""
-
-    openai_base_url: str = ""
-    openai_api_key: str = ""
+    # OpenAI 兼容模型清单：{"<key>": {"label": str, "base_url": str, "api_key": str, "model": str}}
+    # 任意 OpenAI 兼容端点（云端兼容网关 / DeepSeek / 私有部署等）都按此配置接入
+    llm_models: dict[str, dict[str, Any]] = {}
 
     light_rag_base_url: str = ""
     light_rag_api_key: str = ""
@@ -49,6 +45,10 @@ class Settings(BaseSettings):
     guard_max_rounds: int = 0
     guard_default_reply: str = ""
 
+    # 文件导入（图 DSL / 知识库文档）：单文件字节上限与知识库分块字符数
+    upload_max_bytes: int = 5 * 1024 * 1024
+    document_chunk_chars: int = 800
+
     # 内置向量库
     embedding_dim: int = 256
     embedding_base_url: str = ""
@@ -63,8 +63,8 @@ class Settings(BaseSettings):
     history_window: int = 0
     # 记忆：窗口之外的历史压缩为 summary 变量注入（依赖 window 开启；调用模型失败时降级为仅窗口）
     history_summary_enabled: bool = False
-    history_summary_provider: str = "cloud_gateway"
-    history_summary_model: str = ""
+    # 摘要用哪个模型（llm_models 的 key）；留空则用清单里的第一个
+    history_summary_provider: str = ""
     history_summary_max_chars: int = 4000
 
     # 幂等 / 并发

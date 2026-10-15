@@ -1,32 +1,103 @@
+# 本地全栈一键启动（数据开发阶段；暂不启用 Redis）
+#
+#   docker compose up -d --build     # api + worker + ui + mysql + langfuse
+#   docker compose down              # 停止
+#   docker compose down -v           # 停止并清空数据卷（mysql / langfuse）
+#
+# 访问：管理端 http://localhost:5199 ，后端 http://localhost:8900/healthz ，Langfuse http://localhost:3000
+# 数据库为 compose 内的 MySQL；Redis 暂不启用（AP_REDIS_URL 沿用 .env 的空值），
+# 幂等 / 并发 / 限流 / 队列自动降级为进程内实现（单实例语义）。
 services:
   api:
     build: .
     image: agent-platform:dev
     env_file: .env
+    # 本地一体化部署：DB 指向 compose 内的 mysql（覆盖 .env 中的内网地址）
+    environment:
+      AP_DB_DSN: mysql+pymysql://agent:${LOCAL_MYSQL_PASSWORD:-agent}@mysql:3306/agent_platform?charset=utf8mb4
+      AP_LANGFUSE_HOST: http://langfuse:3000
     ports:
-      - "8900:8900"
+      - "${AP_API_PORT:-8900}:8900"
     depends_on:
-      - langfuse
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8900/healthz').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
 
-  # 长任务 worker（Redis 队列消费：知识入库 / 工作流批处理 / 报告生成）
+  # 长任务 worker（知识入库 / 工作流批处理 / 报告生成）。
+  # 注意：Redis 未启用时队列为进程内实现，worker 收不到 api 进程入队的任务，
+  # 本阶段处于空转轮询（保留拓扑，待接回 Redis 后即生效）。
   worker:
     build: .
     image: agent-platform:dev
     env_file: .env
+    environment:
+      AP_DB_DSN: mysql+pymysql://agent:${LOCAL_MYSQL_PASSWORD:-agent}@mysql:3306/agent_platform?charset=utf8mb4
+      AP_LANGFUSE_HOST: http://langfuse:3000
     command: ["python", "-m", "agent_platform.worker.main"]
+    # 必须等 api 健康后再起：两者都会在启动时 init_db()，同时对新库执行 DDL 会触发
+    # MySQL「concurrent DDL statement」错误。api 先建好表，worker 的 create_all 只做存在性检查。
     depends_on:
-      - langfuse
+      api:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
 
-  # Langfuse 自托管（节点级 trace / 汇总看板）
+  # 管理端：nginx 托静态产物并反代 /admin /v1 /api /healthz 到 api
+  ui:
+    build: ../agent-platform-ui
+    image: agent-platform-ui:dev
+    ports:
+      - "${AP_UI_PORT:-5199}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # 中台本地 MySQL（表由 api / worker 启动时 init_db() 建立，无需手工执行 sql/ddl.sql）
+  mysql:
+    image: mysql:8.0
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${LOCAL_MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: agent_platform
+      MYSQL_USER: agent
+      MYSQL_PASSWORD: ${LOCAL_MYSQL_PASSWORD:-agent}
+    ports:
+      - "${LOCAL_MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${LOCAL_MYSQL_ROOT_PASSWORD:-root}"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # Langfuse 自托管（节点级 trace / 汇总看板）；口令与密钥由 .env 提供
   langfuse:
     image: langfuse/langfuse:2
     environment:
-      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-db:5432/langfuse
-      NEXTAUTH_SECRET: change-me
-      SALT: change-me
-      NEXTAUTH_URL: http://localhost:3000
+      DATABASE_URL: postgresql://langfuse:${LANGFUSE_DB_PASSWORD:-langfuse}@langfuse-db:5432/langfuse
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:?set LANGFUSE_NEXTAUTH_SECRET in .env}
+      SALT: ${LANGFUSE_SALT:?set LANGFUSE_SALT in .env}
+      NEXTAUTH_URL: ${LANGFUSE_NEXTAUTH_URL:-http://localhost:3000}
+      LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID:-agent-platform}
+      LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME:-agent-platform}
+      LANGFUSE_INIT_PROJECT_ID: ${LANGFUSE_INIT_PROJECT_ID:-agent-platform}
+      LANGFUSE_INIT_PROJECT_NAME: ${LANGFUSE_INIT_PROJECT_NAME:-agent-platform}
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${AP_LANGFUSE_PUBLIC_KEY:?set AP_LANGFUSE_PUBLIC_KEY in .env}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${AP_LANGFUSE_SECRET_KEY:?set AP_LANGFUSE_SECRET_KEY in .env}
+      # 初始管理员（不设则无账号，需在 UI 现场注册）
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-admin@local.dev}
+      LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME:-admin}
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-admin1234}
     ports:
-      - "3000:3000"
+      - "${LANGFUSE_PORT:-3000}:3000"
     depends_on:
       - langfuse-db
 
@@ -34,10 +105,11 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: langfuse
-      POSTGRES_PASSWORD: langfuse
+      POSTGRES_PASSWORD: ${LANGFUSE_DB_PASSWORD:-langfuse}
       POSTGRES_DB: langfuse
     volumes:
       - langfuse_pgdata:/var/lib/postgresql/data
 
 volumes:
+  mysql_data:
   langfuse_pgdata:

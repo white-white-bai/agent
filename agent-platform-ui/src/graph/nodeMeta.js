@@ -25,8 +25,7 @@ export const NODE_TYPES = [
     color: '#409eff',
     summary: '大模型调用',
     fields: [
-      { key: 'provider', label: 'provider', kind: 'select', options: ['cloud_gateway', 'openai'] },
-      { key: 'model', label: '模型', kind: 'text', placeholder: '留空用 provider 默认' },
+      { key: 'provider', label: '模型', kind: 'model-select', help: '来自 AP_LLM_MODELS 的模型条目；留空用清单第一个' },
       { key: 'system_prompt', label: '系统提示词', kind: 'textarea', rows: 3 },
       { key: 'user_prompt', label: '用户提示词', kind: 'textarea', rows: 4 },
       { key: 'temperature', label: 'temperature', kind: 'number', step: 0.1, min: 0, max: 2 },
@@ -34,8 +33,7 @@ export const NODE_TYPES = [
       { key: 'output_var', label: '输出变量', kind: 'text' },
     ],
     defaults: () => ({
-      provider: 'cloud_gateway',
-      model: '',
+      provider: '',
       system_prompt: '',
       user_prompt: '{{ query }}',
       temperature: 0.7,
@@ -131,6 +129,51 @@ export const NODE_TYPES = [
       { key: 'output_var', label: '输出变量', kind: 'text' },
     ],
     defaults: () => ({ template: '{{ text }}', output_var: 'answer' }),
+  },
+  {
+    type: 'parameter-extractor',
+    label: '参数提取',
+    color: '#b5673a',
+    summary: 'LLM 结构化参数提取，输出按参数名平铺',
+    fields: [
+      { key: 'provider', label: '模型', kind: 'model-select', help: '来自 AP_LLM_MODELS 的模型条目；留空用清单第一个' },
+      { key: 'query', label: '提取内容', kind: 'textarea', rows: 2 },
+      { key: 'instruction', label: '提取指令', kind: 'textarea', rows: 3 },
+      { key: 'parameters', label: '参数定义', kind: 'rows', columns: [
+        { key: 'name', label: '参数名', kind: 'text' },
+        { key: 'type', label: '类型', kind: 'text' },
+        { key: 'description', label: '描述', kind: 'text' },
+        { key: 'required', label: '必填', kind: 'text' },
+        { key: 'options', label: '可选值', kind: 'json' },
+      ] },
+      { key: 'temperature', label: 'temperature', kind: 'number', step: 0.1, min: 0, max: 2 },
+      { key: 'max_tokens', label: 'max_tokens', kind: 'number', min: 1, nullable: true },
+      { key: 'output_var', label: '输出变量', kind: 'text' },
+    ],
+    defaults: () => ({
+      provider: '',
+      query: '{{ query }}',
+      instruction: '',
+      parameters: [],
+      temperature: 0.7,
+      max_tokens: null,
+      output_var: 'extracted',
+    }),
+  },
+  {
+    type: 'template-transform',
+    label: '模板转换',
+    color: '#9a6cb8',
+    summary: '本地变量绑定 + Jinja2 模板渲染',
+    fields: [
+      { key: 'variables', label: '入参', kind: 'rows', columns: [
+        { key: 'name', label: '参数名', kind: 'text' },
+        { key: 'expression', label: '表达式', kind: 'text' },
+      ] },
+      { key: 'template', label: '模板', kind: 'textarea', rows: 6 },
+      { key: 'output_var', label: '输出变量', kind: 'text' },
+    ],
+    defaults: () => ({ variables: [], template: '', output_var: 'output' }),
   },
 ]
 

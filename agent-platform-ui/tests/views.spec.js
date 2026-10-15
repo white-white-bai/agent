@@ -178,7 +178,7 @@ describe('AppsView', () => {
 describe('ProvidersView', () => {
   it('renders the provider tables from the config payload', async () => {
     api.listProviders.mockResolvedValueOnce({
-      llm: [{ name: 'cloud_gateway', label: '网关', configured: true, detail: 'http://gw' }],
+      llm: [{ name: 'deepseek', label: 'DeepSeek', configured: true, detail: 'https://api.deepseek.com/v1' }],
       retriever: [{ name: 'builtin', label: '内置', configured: true, detail: '' }],
       embedding: { name: 'hash', configured: true, detail: 'dim=256' },
       observability: { name: 'langfuse', configured: false, detail: '' },
@@ -187,7 +187,7 @@ describe('ProvidersView', () => {
     expect(api.listProviders).toHaveBeenCalled()
     expect(wrapper.text()).toContain('大模型 provider')
     expect(wrapper.text()).toContain('检索 provider')
-    expect(wrapper.text()).toContain('cloud_gateway')
+    expect(wrapper.text()).toContain('deepseek')
     expect(wrapper.text()).toContain('已配置')
   })
 })

@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import PurePath
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 
 from agent_platform.api import services
 from agent_platform.api.deps import get_current_admin, require_admin, require_permission
@@ -19,6 +20,7 @@ from agent_platform.api.schemas import (
     McpServerCreateRequest,
     SensitiveWordCreateRequest,
 )
+from agent_platform.api.uploads import chunk_text, read_upload
 from agent_platform.core import metrics
 from agent_platform.core.accounts import AdminPrincipal
 from agent_platform.core.config import get_settings
@@ -27,6 +29,9 @@ from agent_platform.knowledge.embeddings import Embedder
 from agent_platform.knowledge.vector_store import add_document, delete_document
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
+
+DSL_SUFFIXES = {".yml", ".yaml", ".json"}
+DOCUMENT_SUFFIXES = {".txt", ".md", ".json", ".csv"}
 
 
 def _app_dict(row: Any) -> dict[str, Any]:
@@ -186,6 +191,42 @@ def import_graph(app_uuid: str, request: GraphImportRequest) -> dict[str, Any]:
     }
 
 
+@router.post("/apps/{app_uuid}/graph/import/file", dependencies=[Depends(require_permission("graph:write"))])
+async def import_graph_file(
+    app_uuid: str,
+    file: UploadFile,
+    llm_provider: str = Form(""),
+    retriever: str = Form("builtin"),
+    name: str = Form(""),
+    save: bool = Form(True),
+) -> dict[str, Any]:
+    app_row = services.get_app_by_uuid(app_uuid)
+    if app_row is None:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    content = await read_upload(file, DSL_SUFFIXES)
+    try:
+        result = convert(
+            parse_dsl(content),
+            app_id=app_row.app_id,
+            name=name or app_row.app_name,
+            llm_provider=llm_provider,
+            retriever=retriever,
+        )
+    except DifyImportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if save:
+        services.save_draft(app_uuid, result.definition)
+    return {
+        "data": {
+            "app_uuid": app_uuid,
+            "saved": save,
+            "stats": result.stats,
+            "warnings": result.warnings,
+            "definition": result.definition,
+        }
+    }
+
+
 # --------------------------------------------------------------------------- 护栏：敏感词
 
 @router.get("/sensitive-words", dependencies=[Depends(require_permission("guard:read"))])
@@ -305,6 +346,44 @@ def delete_document_endpoint(document_uuid: str) -> dict[str, Any]:
     return {"data": {"uuid": document_uuid, "is_deleted": 1}}
 
 
+@router.post("/documents/upload", dependencies=[Depends(require_permission("knowledge:write"))])
+async def upload_document(
+    file: UploadFile,
+    tenant_code: str = Form(""),
+    dataset_id: str = Form(""),
+    principal: AdminPrincipal = Depends(get_current_admin),
+) -> dict[str, Any]:
+    settings = get_settings()
+    content = await read_upload(file, DOCUMENT_SUFFIXES)
+    chunks = chunk_text(content, settings.document_chunk_chars)
+    if not chunks:
+        raise HTTPException(status_code=400, detail="文件内容为空")
+    tenant = principal.scope_tenant(tenant_code or settings.default_tenant)
+    title = PurePath(file.filename or "").stem
+    embedder = Embedder(settings)
+    rows = []
+    for index, chunk in enumerate(chunks):
+        embedding = await embedder.encode(chunk)
+        rows.append(
+            add_document(
+                tenant_code=tenant,
+                dataset_id=dataset_id,
+                title=title,
+                content=chunk,
+                embedding=embedding,
+                metadata={"source": "upload", "filename": file.filename or "", "chunk": index, "chunks": len(chunks)},
+            )
+        )
+    return {
+        "data": {
+            "title": title,
+            "dataset_id": dataset_id,
+            "chunks": len(rows),
+            "uuids": [row.uuid for row in rows],
+        }
+    }
+
+
 # --------------------------------------------------------------------------- 模型 / 检索 provider
 
 @router.get("/providers", dependencies=[Depends(require_permission("provider:read"))])
@@ -312,19 +391,15 @@ def list_providers() -> dict[str, Any]:
     settings = get_settings()
     return {
         "data": {
+            # 来自 AP_LLM_MODELS 的 OpenAI 兼容模型清单（配置唯一来源是 settings，管理端只读回显）
             "llm": [
                 {
-                    "name": "cloud_gateway",
-                    "label": "云智通用大模型调用器",
-                    "configured": bool(settings.cloud_gateway_base_url and settings.cloud_gateway_llm_app_id),
-                    "detail": settings.cloud_gateway_base_url,
-                },
-                {
-                    "name": "openai",
-                    "label": "OpenAI 兼容私有 provider",
-                    "configured": bool(settings.openai_base_url and settings.openai_api_key),
-                    "detail": settings.openai_base_url,
-                },
+                    "name": key,
+                    "label": entry.get("label") or key,
+                    "configured": bool(entry.get("base_url") and entry.get("api_key") and entry.get("model")),
+                    "detail": entry.get("base_url", ""),
+                }
+                for key, entry in settings.llm_models.items()
             ],
             "retriever": [
                 {

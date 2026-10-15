@@ -209,6 +209,118 @@ def test_run_end_joins_outputs_only_without_answer():
     assert "answer" not in empty
 
 
+# --------------------------------------------------------------------------- parameter-extractor / template-transform
+
+
+class ScriptedLLM:
+    """按脚本逐次返回模型回复的 LLM mock。"""
+
+    def __init__(self, replies, error: Exception | None = None) -> None:
+        self.replies = list(replies)
+        self.error = error
+        self.calls: list[dict] = []
+
+    async def __call__(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return self.replies.pop(0)
+
+
+@pytest.mark.asyncio
+async def test_run_parameter_extractor_parses_json_and_stores_fields():
+    llm = ScriptedLLM(['{"region": "常州", "count": "3", "tags": ["a"]}'])
+    ctx = EngineContext(llm=llm)
+    node = _node(
+        "extract-1",
+        NodeType.PARAMETER_EXTRACTOR,
+        query="{{ query }}",
+        instruction="提取区域",
+        parameters=[
+            {"name": "region", "type": "string", "required": True},
+            {"name": "count", "type": "number"},
+            {"name": "tags", "type": "array[string]"},
+            {"name": "missing", "type": "string"},
+        ],
+        output_var="extracted",
+    )
+    state = await nodes.run_parameter_extractor(node, {"variables": {"query": "常州的天气"}}, ctx)
+
+    assert llm.calls[0]["user_prompt"] == "提取区域\n\n常州的天气"
+    data = state["variables"]["extracted"]
+    assert data == {
+        "region": "常州",
+        "count": 3.0,
+        "tags": ["a"],
+        "missing": None,
+        "__is_success": 1,
+        "__reason": "",
+    }
+    assert state["variables"]["extract-1"] == data
+    # 参数名不平铺进全局变量，避免覆盖同名输入
+    assert "region" not in state["variables"]
+
+
+@pytest.mark.asyncio
+async def test_run_parameter_extractor_strips_code_fence():
+    llm = ScriptedLLM(['```json\n{"region": "南京"}\n```'])
+    ctx = EngineContext(llm=llm)
+    node = _node("extract-1", NodeType.PARAMETER_EXTRACTOR, query="{{ query }}", parameters=[{"name": "region"}])
+    state = await nodes.run_parameter_extractor(node, {"variables": {"query": "q"}}, ctx)
+    assert state["variables"]["extract-1"]["region"] == "南京"
+    assert state["variables"]["extract-1"]["__is_success"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_parameter_extractor_degrades_on_bad_json():
+    llm = ScriptedLLM(["完全不是 JSON"])
+    ctx = EngineContext(llm=llm)
+    node = _node(
+        "extract-1",
+        NodeType.PARAMETER_EXTRACTOR,
+        query="{{ query }}",
+        parameters=[{"name": "region", "type": "string"}, {"name": "tags", "type": "array[string]"}],
+    )
+    state = await nodes.run_parameter_extractor(node, {"variables": {"query": "q"}}, ctx)
+    data = state["variables"]["extract-1"]
+    assert data["__is_success"] == 0
+    assert "JSON 解析失败" in data["__reason"]
+    assert data["region"] is None
+    assert data["tags"] == []
+
+
+@pytest.mark.asyncio
+async def test_run_parameter_extractor_degrades_on_llm_error():
+    llm = ScriptedLLM([], error=RuntimeError("网关超时"))
+    ctx = EngineContext(llm=llm)
+    node = _node("extract-1", NodeType.PARAMETER_EXTRACTOR, query="{{ query }}", parameters=[{"name": "region"}])
+    state = await nodes.run_parameter_extractor(node, {"variables": {"query": "q"}}, ctx)
+    data = state["variables"]["extract-1"]
+    assert data["__is_success"] == 0
+    assert "网关超时" in data["__reason"]
+
+
+def test_run_template_transform_binds_local_variables():
+    node = _node(
+        "tpl-1",
+        NodeType.TEMPLATE_TRANSFORM,
+        variables=[{"name": "city", "expression": "query"}, {"name": "n", "expression": "n * 2"}],
+        template="{{ city }} 共 {{ n }} 条",
+        output_var="output",
+    )
+    state = nodes.run_template_transform(node, {"variables": {"query": "常州", "n": 21}}, EngineContext(llm=RecordingLLM()))
+    assert state["variables"]["output"] == "常州 共 42 条"
+    assert state["variables"]["tpl-1"] == "常州 共 42 条"
+
+
+def test_run_template_transform_propagates_render_error():
+    from agent_platform.engine.expr import ExpressionError
+
+    node = _node("tpl-1", NodeType.TEMPLATE_TRANSFORM, template="{{ missing }}")
+    with pytest.raises(ExpressionError, match="模板渲染失败"):
+        nodes.run_template_transform(node, {"variables": {}}, EngineContext(llm=RecordingLLM()))
+
+
 # --------------------------------------------------------------------------- 代码沙箱
 
 

@@ -128,7 +128,6 @@ async def _chat_stream(
                 settings.history_window,
                 ctx.llm,
                 provider=settings.history_summary_provider,
-                model=settings.history_summary_model,
                 max_chars=settings.history_summary_max_chars,
             )
         services.save_message(conversation, "user", query=request.query)

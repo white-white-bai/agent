@@ -269,30 +269,126 @@ def test_import_graph_rejects_bad_dsl_and_missing_app(api_client):
     assert api_client.post("/admin/apps/ghost/graph/import", json={"dsl": _dify_dsl()}).status_code == 404
 
 
+def _upload(api_client, path, filename, raw, **form):
+    return api_client.post(path, files={"file": (filename, raw, "application/octet-stream")}, data=form)
+
+
+def test_import_graph_from_yaml_file(api_client):
+    import yaml
+
+    created = _create_app(api_client, app_id="app-file")
+    raw = yaml.safe_dump(_dify_dsl(), allow_unicode=True).encode("utf-8")
+    response = _upload(api_client, f"/admin/apps/{created['uuid']}/graph/import/file", "app.yml", raw)
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["saved"] is True
+    assert data["stats"] == {"total": 3, "converted": 3, "degraded": 0}
+    draft = api_client.get(f"/admin/apps/{created['uuid']}/graph").json()["data"]["definition"]
+    assert [node["id"] for node in draft["nodes"]] == ["start1", "llm2", "answer3"]
+
+
+def test_import_graph_from_json_file_without_saving(api_client):
+    import json
+
+    created = _create_app(api_client)
+    raw = json.dumps(_dify_dsl(), ensure_ascii=False).encode("utf-8")
+    response = _upload(
+        api_client, f"/admin/apps/{created['uuid']}/graph/import/file", "app.json", raw, save="false", name="文件名"
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["saved"] is False and data["definition"]["name"] == "文件名"
+    assert api_client.get(f"/admin/apps/{created['uuid']}/graph").json()["data"]["definition"] == {}
+
+
+def test_import_graph_file_rejects_bad_suffix_bad_content_and_missing_app(api_client):
+    created = _create_app(api_client)
+    path = f"/admin/apps/{created['uuid']}/graph/import/file"
+    bad_suffix = _upload(api_client, path, "app.txt", b"{}")
+    assert bad_suffix.status_code == 400 and "不支持" in bad_suffix.json()["detail"]
+    bad_content = _upload(api_client, path, "app.json", b'{"app": {}}')
+    assert bad_content.status_code == 400
+    assert _upload(api_client, "/admin/apps/ghost/graph/import/file", "app.json", b"{}").status_code == 404
+
+
+def test_import_graph_file_rejects_oversized_upload(api_client, monkeypatch):
+    monkeypatch.setenv("AP_UPLOAD_MAX_BYTES", "16")
+    get_settings.cache_clear()
+    try:
+        created = _create_app(api_client)
+        response = _upload(api_client, f"/admin/apps/{created['uuid']}/graph/import/file", "app.json", b"x" * 64)
+        assert response.status_code == 413
+    finally:
+        get_settings.cache_clear()
+
+
+def test_upload_document_chunks_and_stores_each_chunk(api_client, monkeypatch):
+    # 显式固定分块字符数：默认 800 时正文仅 758 字（40×17 + 39 个 "\n\n"），不足两块，用例会失真
+    monkeypatch.setenv("AP_DOCUMENT_CHUNK_CHARS", "200")
+    get_settings.cache_clear()
+    try:
+        body = ("常州政务大厅工作时间为周一至周五。\n\n" * 40).encode("utf-8")
+        response = _upload(api_client, "/admin/documents/upload", "guide.md", body, tenant_code="t", dataset_id="d1")
+        assert response.status_code == 200
+        data = response.json()["data"]
+        assert data["title"] == "guide" and data["dataset_id"] == "d1"
+        assert data["chunks"] >= 2 and len(data["uuids"]) == data["chunks"]
+
+        rows = api_client.get("/admin/documents", params={"tenant_code": "t", "dataset_id": "d1"}).json()["data"]
+        assert len(rows) == data["chunks"]
+        assert {row["title"] for row in rows} == {"guide"}
+        assert all(row["metadata"]["source"] == "upload" for row in rows)
+    finally:
+        get_settings.cache_clear()
+
+
+def test_upload_document_decodes_gbk(api_client):
+    body = "常州天气查询办事指南".encode("gb18030")
+    response = _upload(api_client, "/admin/documents/upload", "guide.txt", body, tenant_code="t")
+    assert response.status_code == 200
+    rows = api_client.get("/admin/documents", params={"tenant_code": "t"}).json()["data"]
+    assert rows[0]["content"] == "常州天气查询办事指南"
+
+
+def test_upload_document_rejects_bad_suffix_and_empty_file(api_client):
+    bad_suffix = _upload(api_client, "/admin/documents/upload", "a.exe", b"x", tenant_code="t")
+    assert bad_suffix.status_code == 400
+    empty = _upload(api_client, "/admin/documents/upload", "a.txt", b"   \n\n  ", tenant_code="t")
+    assert empty.status_code == 400 and "为空" in empty.json()["detail"]
+
+
 # --------------------------------------------------------------------------- provider / 护栏配置
 
 
 def test_list_providers_reports_configured_flags(api_client, monkeypatch):
-    monkeypatch.setenv("AP_OPENAI_BASE_URL", "")
-    monkeypatch.setenv("AP_OPENAI_API_KEY", "")
+    monkeypatch.setenv("AP_LLM_MODELS", "{}")
     get_settings.cache_clear()
     data = api_client.get("/admin/providers").json()["data"]
-    assert [row["name"] for row in data["llm"]] == ["cloud_gateway", "openai"]
-    assert all(row["configured"] is False for row in data["llm"])
+    assert data["llm"] == []
     assert [row["name"] for row in data["retriever"]] == ["builtin", "light_rag", "knowflow", "knowledge_graph"]
     assert data["retriever"][0]["configured"] is True
     assert data["embedding"]["name"] == "hash"
     assert data["observability"]["configured"] is False
 
-    monkeypatch.setenv("AP_OPENAI_BASE_URL", "http://llm.internal/v1")
-    monkeypatch.setenv("AP_OPENAI_API_KEY", "sk-x")
+    monkeypatch.setenv(
+        "AP_LLM_MODELS",
+        '{"deepseek": {"label": "DeepSeek", "base_url": "https://api.deepseek.com/v1",'
+        ' "api_key": "sk-x", "model": "deepseek-chat"}}',
+    )
     monkeypatch.setenv("AP_KNOWFLOW_BASE_URL", "http://knowflow.internal")
     monkeypatch.setenv("AP_EMBEDDING_BASE_URL", "http://embed.internal")
     monkeypatch.setenv("AP_EMBEDDING_MODEL", "bge-m3")
     get_settings.cache_clear()
     try:
         data = api_client.get("/admin/providers").json()["data"]
-        assert data["llm"][1]["configured"] is True and data["llm"][1]["detail"] == "http://llm.internal/v1"
+        assert data["llm"] == [
+            {
+                "name": "deepseek",
+                "label": "DeepSeek",
+                "configured": True,
+                "detail": "https://api.deepseek.com/v1",
+            }
+        ]
         assert data["retriever"][2]["configured"] is True and data["retriever"][1]["configured"] is False
         assert data["embedding"] == {"name": "remote", "configured": True, "detail": "bge-m3"}
     finally:

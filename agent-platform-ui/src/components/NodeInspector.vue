@@ -8,6 +8,8 @@ import { nodeMeta } from '@/graph/nodeMeta'
 
 const props = defineProps({
   node: { type: Object, default: null },
+  // 可用模型条目：[{ value, label }]，来自 /admin/providers 的 llm 清单
+  modelOptions: { type: Array, default: () => [] },
 })
 const emit = defineEmits(['update', 'remove'])
 
@@ -97,6 +99,21 @@ function setTitle(value) {
             @update:model-value="(value) => setField(field.key, value)"
           >
             <el-option v-for="option in field.options" :key="option" :label="option" :value="option" />
+          </el-select>
+          <el-select
+            v-else-if="field.kind === 'model-select'"
+            :model-value="fieldValue(field.key)"
+            class="inspector__select"
+            clearable
+            placeholder="留空用清单第一个"
+            @update:model-value="(value) => setField(field.key, value || '')"
+          >
+            <el-option
+              v-for="option in modelOptions"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
           </el-select>
           <KeyValueEditor
             v-else-if="field.kind === 'keyvalue'"

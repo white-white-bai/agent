@@ -33,6 +33,8 @@ npm run build    # 产物输出到 dist/
 
 `npm run dev` 会把 `/admin`、`/v1`、`/api`、`/healthz` 代理到后端，目标地址由 `AP_UI_PROXY_TARGET` 控制，默认 `http://127.0.0.1:8900`。启动前端前需先起后端（见 `../agent-platform/README.md` 的「本地运行」），否则代理接口 502。
 
+也可以走 Docker 一键起（见 `../agent-platform/docker-compose.yml`）：`docker compose up -d --build` 会用本目录的 `Dockerfile` 多阶段构建静态产物，再用 nginx 托管并把 `/admin`、`/v1`、`/api`、`/healthz` 反代到后端容器，浏览器访问 `http://localhost:5199`。
+
 Vite 默认只监听 `localhost`（IPv6 `::1`），浏览器请用 `http://localhost:5199`；`127.0.0.1:5199` 会连不上。
 
 ## 目录

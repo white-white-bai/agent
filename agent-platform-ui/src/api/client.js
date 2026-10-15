@@ -66,13 +66,14 @@ export async function request(path, { method = 'GET', body, params } = {}) {
   if (token) {
     headers.Authorization = `Bearer ${token}`
   }
-  if (body !== undefined) {
+  const isForm = body instanceof FormData
+  if (body !== undefined && !isForm) {
     headers['Content-Type'] = 'application/json'
   }
   const response = await fetch(buildUrl(path, params), {
     method,
     headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: body === undefined || isForm ? body : JSON.stringify(body),
   })
   if (response.status === 401 && unauthorizedHandler) {
     unauthorizedHandler()

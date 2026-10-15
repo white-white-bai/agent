@@ -27,6 +27,8 @@ export const listGraphVersions = (uuid) => request(`/admin/apps/${uuid}/graph/ve
 export const rollbackGraph = (uuid, version) =>
   request(`/admin/apps/${uuid}/graph/rollback`, { method: 'POST', body: { version } })
 export const importGraph = (uuid, body) => request(`/admin/apps/${uuid}/graph/import`, { method: 'POST', body })
+export const importGraphFile = (uuid, formData) =>
+  request(`/admin/apps/${uuid}/graph/import/file`, { method: 'POST', body: formData })
 
 // 护栏：敏感词 + 进程级开关
 export const listSensitiveWords = (params) => request('/admin/sensitive-words', { params })
@@ -43,6 +45,7 @@ export const deleteMcpServer = (uuid) => request(`/admin/mcp-servers/${uuid}`, {
 export const listDocuments = (params) => request('/admin/documents', { params })
 export const createDocument = (body) => request('/admin/documents', { method: 'POST', body })
 export const deleteDocument = (uuid) => request(`/admin/documents/${uuid}`, { method: 'DELETE' })
+export const uploadDocument = (formData) => request('/admin/documents/upload', { method: 'POST', body: formData })
 
 // 模型 / 检索 provider
 export const listProviders = () => request('/admin/providers')

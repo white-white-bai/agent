@@ -14,7 +14,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-o", "--output", default="", help="输出文件；缺省打印到标准输出")
     parser.add_argument("--app-id", default="", help="覆盖 app_id（缺省取 DSL 的 app.id）")
     parser.add_argument("--name", default="", help="覆盖应用名（缺省取 DSL 的 app.name）")
-    parser.add_argument("--llm-provider", default="cloud_gateway", choices=["cloud_gateway", "openai"])
+    parser.add_argument("--llm-provider", default="", help="AP_LLM_MODELS 的模型条目 key（缺省用清单第一个）")
     parser.add_argument(
         "--retriever",
         default="builtin",

@@ -25,7 +25,7 @@ agent-platform/
 │   ├── graph/               # 图定义 schema（pydantic）
 │   ├── importer/            # Dify DSL → 中台图定义（导入器 + CLI）
 │   ├── engine/              # LangGraph 执行器与节点
-│   ├── models/              # 模型适配器（云智网关 / OpenAI 兼容）
+│   ├── models/              # 模型适配器（OpenAI 兼容）
 │   ├── knowledge/           # 检索适配器（内置向量库 / 外接平台）
 │   ├── tools/               # MCP（内置 HTTP→MCP 桥 + MCP Client）
 │   ├── checkpoint/          # 自研 MySQL checkpointer
@@ -60,13 +60,29 @@ agent-platform/
 
 健康检查：`GET /healthz`。
 
+## 大模型配置（OpenAI 兼容）
+
+中台不内置模型 provider，统一按 **OpenAI 兼容端点** 配置，可配多个模型条目供节点下拉选择。
+配置唯一来源是 `AP_LLM_MODELS`（`.env`，JSON）：
+
+```json
+{
+  "deepseek": { "label": "DeepSeek", "base_url": "https://api.deepseek.com/v1", "api_key": "sk-...", "model": "deepseek-chat" },
+  "commandcode": { "label": "云端兼容", "base_url": "https://api.commandcode.ai/provider", "api_key": "sk-...", "model": "..." }
+}
+```
+
+- 条目字段：`label`（展示名，可省）、`base_url`、`api_key`、`model`（必填）。
+- 任意 OpenAI 兼容端点都可接入；`llm` / `parameter-extractor` 节点的「模型」下拉即这些条目，留空用清单第一个。
+- 管理端 `GET /admin/providers` 只读回显清单与配置状态。
+
 ## Dify 导入
 
 把 Dify 导出的 DSL（JSON / YAML）转成中台图定义，供存量应用平滑迁移。CLI：
 
 ```bash
 python -m agent_platform.importer app.yml -o graph.json   # 缺省打印到 stdout
-python -m agent_platform.importer app.yml --llm-provider openai --retriever light_rag
+python -m agent_platform.importer app.yml --llm-provider deepseek --retriever light_rag
 ```
 
 管理端：`POST /admin/apps/{uuid}/graph/import`，body 二选一 `dsl`（对象）或 `content`（JSON/YAML 字符串），
@@ -74,13 +90,16 @@ python -m agent_platform.importer app.yml --llm-provider openai --retriever ligh
 返回 `{stats, warnings, definition}`，`warnings` 逐条说明降级与需人工复核项。应用不存在 404，DSL 非法 400。
 
 - **可映射节点**：`start` / `end` / `llm` / `knowledge-retrieval` / `if-else` / `code`(python3) / `tool` /
-  `variable-aggregator` / `answer`。
-- **降级**：其余节点（如 `http-request`、`template-transform`、非 python3 的 `code`）旁路丢弃并提示，其前后边按
+  `variable-aggregator` / `answer` / `parameter-extractor` / `template-transform`。
+- **降级**：其余节点（如 `http-request`、`iteration`、`question-classifier`、非 python3 的 `code`）旁路丢弃并提示，其前后边按
   DFS 传递重连；`all of` / `any of` 等 Jinja2 无法表达的比较降为常量 `false` 并提示。
 - **变量引用**：Dify `{{#node.var#}}` 按目标字段语义改写 —— 模板字段（LLM 提示词、知识库 query、answer）还原为
   `{{ }}` 模板，表达式字段（end 输出、条件、code 入参、tool 参数）还原为裸表达式。
-- **LLM 适配**：Dify 的模型 provider 不映射，统一落到 `--llm-provider`（默认 `cloud_gateway`），模型名沿用 DSL，
+- **LLM 适配**：Dify 的模型 provider 不映射，统一落到 `--llm-provider`（`AP_LLM_MODELS` 的模型条目 key，留空用清单第一个），
   参数取 `completion_params`（缺省 temperature 0.7）。`tool` 节点落到 MCP，需按 `server` 名在中台注册 MCP Server。
+- **parameter-extractor**：按 Dify `parameters` 定义做 LLM 结构化提取（prompt 模式，`function_call` 会退化并提示），
+  输出按参数名平铺到 `extractN.<name>`，并带 `__is_success` / `__reason`；JSON 解析失败降级为 `__is_success=0` 继续执行。
+- **template-transform**：`variables` 绑定本地变量名后渲染 Jinja2 模板，输出固定为 `tplN`（字符串）。
 
 ## 数据库与迁移
 
@@ -181,7 +200,8 @@ curl localhost:8900/admin/apps -H "Authorization: Bearer <token>"
 供管理端展示，不落库、不可改（改配置走 `.env`）：
 
 - `GET /admin/providers`（权限点 `provider:read`）：返回 `llm` / `retriever` / `embedding` / `observability`
-  四类的 `{name, label, configured, detail}`，`configured` 由当前 settings 是否配齐凭据推导。
+  四类的 `{name, label, configured, detail}`，`configured` 由当前 settings 是否配齐凭据推导；
+  其中 `llm` 直接来自 `AP_LLM_MODELS`（OpenAI 兼容模型清单）。
 - `GET /admin/guard/config`（权限点 `guard:read`）：返回进程级护栏开关与阈值（总开关、敏感词、额度、频率、轮数、
   日 token 配额、每分钟速率、最大轮数、默认回复）。
 
@@ -229,6 +249,31 @@ Windows 下 `curl -d` 直接传非 ASCII 体会被控制台编码破坏，请求
 
 管理端为独立前端 `../agent-platform-ui`，`npm run dev` 在 5199 起 Vite 并把 `/admin` `/v1` `/api` `/healthz`
 代理到 `AP_UI_PROXY_TARGET`（默认 `http://127.0.0.1:8900`）。
+
+## 本地全栈（docker compose，暂不启用 Redis）
+
+数据开发阶段一条命令拉起整套服务（api / worker / ui / mysql / langfuse）：
+
+```bash
+cd agent-platform
+docker compose up -d --build     # 构建并启动
+docker compose ps                # 查看状态
+docker compose logs -f api       # 跟踪日志
+docker compose down              # 停止（保留数据卷）
+docker compose down -v           # 停止并清空 mysql / langfuse 数据
+```
+
+| 入口 | 地址 |
+| --- | --- |
+| 管理端（nginx 托静态产物 + 反代 `/admin` `/v1` `/api`） | http://localhost:5199 |
+| 后端健康检查 | http://localhost:8900/healthz |
+| Langfuse | http://localhost:3000 |
+
+- 数据库走 compose 内的 MySQL 容器（`AP_DB_DSN` 由 compose 覆盖为 `mysql:3306`），建表由 api 启动时 `init_db()` 完成，无需手工执行 `sql/ddl.sql`。
+- **Redis 未启用**：`AP_REDIS_URL` 沿用 `.env` 的空值，幂等 / 并发 / 限流 / 队列降级为进程内实现（单实例语义）；
+  因此 worker 容器收不到 api 进程入队的任务，本阶段处于空转轮询。需要异步任务时，在 `.env` 填回 Redis 地址并在 compose 里加回 redis 服务。
+- `LANGFUSE_NEXTAUTH_SECRET`、`LANGFUSE_SALT`、`AP_LANGFUSE_PUBLIC_KEY`、`AP_LANGFUSE_SECRET_KEY` 是 langfuse 容器的启动必填项，已在 `.env` 给本地默认值。
+- 只用 MySQL + api、不需要 UI 或 Langfuse 时，可 `docker compose up -d --build api worker mysql` 按需启动。
 
 ## 内网冒烟
 

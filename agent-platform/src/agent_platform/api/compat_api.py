@@ -15,6 +15,7 @@ from agent_platform.api.schemas import (
     TokenRequest,
     WorkflowRunRequest,
 )
+from agent_platform.core.config import get_settings
 from agent_platform.core.security import AuthError, check_client, issue_token, resolve_api_key
 from agent_platform.engine.context import EngineContext
 from agent_platform.engine.runtime import run_graph
@@ -265,7 +266,7 @@ async def cloud_run_workflow(
         "status": "success",
         "answer": answer,
         "llm_name": llm_name,
-        "resolved_model": llm_name or "cloud_gateway",
+        "resolved_model": llm_name or (next(iter(get_settings().llm_models), "")),
         "error_code": "",
         "error_message": "",
         **{k: v for k, v in state.get("variables", {}).items() if not k.startswith("_")},

@@ -32,6 +32,7 @@ describe('api endpoint map', () => {
     ['listGraphVersions', () => api.listGraphVersions('u'), '/admin/apps/u/graph/versions', undefined],
     ['rollbackGraph', () => api.rollbackGraph('u', 2), '/admin/apps/u/graph/rollback', { method: 'POST', body: { version: 2 } }],
     ['importGraph', () => api.importGraph('u', { content: 'x' }), '/admin/apps/u/graph/import', { method: 'POST', body: { content: 'x' } }],
+    ['importGraphFile', () => api.importGraphFile('u', 'fd'), '/admin/apps/u/graph/import/file', { method: 'POST', body: 'fd' }],
     ['listSensitiveWords', () => api.listSensitiveWords({ tenant_code: 't' }), '/admin/sensitive-words', { params: { tenant_code: 't' } }],
     ['createSensitiveWord', () => api.createSensitiveWord({ word: 'w' }), '/admin/sensitive-words', { method: 'POST', body: { word: 'w' } }],
     ['deleteSensitiveWord', () => api.deleteSensitiveWord(3), '/admin/sensitive-words/3', { method: 'DELETE' }],
@@ -42,6 +43,7 @@ describe('api endpoint map', () => {
     ['listDocuments', () => api.listDocuments({ dataset_id: 'd' }), '/admin/documents', { params: { dataset_id: 'd' } }],
     ['createDocument', () => api.createDocument({ content: 'c' }), '/admin/documents', { method: 'POST', body: { content: 'c' } }],
     ['deleteDocument', () => api.deleteDocument('u'), '/admin/documents/u', { method: 'DELETE' }],
+    ['uploadDocument', () => api.uploadDocument('fd'), '/admin/documents/upload', { method: 'POST', body: 'fd' }],
     ['listProviders', () => api.listProviders(), '/admin/providers', undefined],
     ['metricsOverview', () => api.metricsOverview({ days: 7 }), '/admin/metrics/overview', { params: { days: 7 } }],
   ]

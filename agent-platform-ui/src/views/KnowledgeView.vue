@@ -2,7 +2,7 @@
 import { reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { createDocument, deleteDocument, listDocuments } from '@/api'
+import { createDocument, deleteDocument, listDocuments, uploadDocument } from '@/api'
 import { useTable } from '@/composables/useTable'
 import { useAuthStore } from '@/stores/auth'
 
@@ -17,9 +17,46 @@ const saving = ref(false)
 const detail = ref(null)
 const form = reactive({ tenant_code: '', dataset_id: '', title: '', content: '', metadata: '{}' })
 
+const uploadVisible = ref(false)
+const uploading = ref(false)
+const uploadFile = ref(null)
+const uploadForm = reactive({ tenant_code: '', dataset_id: '' })
+
 function openCreate() {
   Object.assign(form, { tenant_code: filters.tenant_code, dataset_id: filters.dataset_id, title: '', content: '', metadata: '{}' })
   dialogVisible.value = true
+}
+
+function openUpload() {
+  Object.assign(uploadForm, { tenant_code: filters.tenant_code, dataset_id: filters.dataset_id })
+  uploadFile.value = null
+  uploadVisible.value = true
+}
+
+function onUploadChange(file) {
+  uploadFile.value = file.raw
+}
+
+async function submitUpload() {
+  if (!uploadFile.value) {
+    ElMessage.warning('请选择文件')
+    return
+  }
+  const body = new FormData()
+  body.append('file', uploadFile.value)
+  body.append('tenant_code', uploadForm.tenant_code || '')
+  body.append('dataset_id', uploadForm.dataset_id || '')
+  uploading.value = true
+  try {
+    const result = await uploadDocument(body)
+    uploadVisible.value = false
+    ElMessage.success(`已入库 ${result.chunks} 个分块`)
+    await reload()
+  } catch (error) {
+    ElMessage.error(error.message || '上传失败')
+  } finally {
+    uploading.value = false
+  }
 }
 
 async function submit() {
@@ -76,6 +113,7 @@ async function remove(row) {
       <el-input v-model="filters.dataset_id" placeholder="数据集 id" class="toolbar__input" @keyup.enter="reload()" />
       <el-button @click="reload()">查询</el-button>
       <el-button v-if="auth.can('knowledge:write')" type="primary" @click="openCreate">新增文档</el-button>
+      <el-button v-if="auth.can('knowledge:write')" @click="openUpload">上传文件</el-button>
     </div>
     <el-table v-loading="loading" :data="rows" border>
       <el-table-column prop="title" label="标题" min-width="160" />
@@ -89,6 +127,26 @@ async function remove(row) {
         </template>
       </el-table-column>
     </el-table>
+
+    <el-dialog v-model="uploadVisible" title="上传知识库文件" width="520px">
+      <el-form label-position="top">
+        <el-form-item label="文件（.txt / .md / .json / .csv，按段落分块入库）">
+          <el-upload :auto-upload="false" :limit="1" accept=".txt,.md,.json,.csv" :on-change="onUploadChange" :on-remove="() => (uploadFile = null)">
+            <el-button>选择文件</el-button>
+          </el-upload>
+        </el-form-item>
+        <el-form-item label="数据集 id">
+          <el-input v-model="uploadForm.dataset_id" placeholder="留空为默认数据集" />
+        </el-form-item>
+        <el-form-item label="租户编码（留空取默认租户）">
+          <el-input v-model="uploadForm.tenant_code" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="uploadVisible = false">取消</el-button>
+        <el-button type="primary" :loading="uploading" @click="submitUpload">上传并入库</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="dialogVisible" title="新增知识库文档" width="600px">
       <el-form label-position="top">

@@ -1,3 +1,4 @@
+import { reactive } from 'vue'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -90,6 +91,20 @@ describe('nodeCell', () => {
 
   it('keeps an explicit title', () => {
     expect(nodeCell({ id: 'n', type: 'answer', title: '输出', config: {} }).label).toBe('输出')
+  })
+
+  it('clones the config of a reactive node without DataCloneError', () => {
+    const node = reactive({
+      id: 'llm_1',
+      type: 'llm',
+      title: '',
+      position: { x: 0, y: 0 },
+      config: { provider: 'deepseek', nested: { a: 1 } },
+    })
+    const cell = nodeCell(node)
+    expect(cell.data.config).toEqual({ provider: 'deepseek', nested: { a: 1 } })
+    cell.data.config.nested.a = 2
+    expect(node.config.nested.a).toBe(1)
   })
 })
 

@@ -1,3 +1,5 @@
+import { toRaw } from 'vue'
+
 import { conditionPorts, nodeMeta } from './nodeMeta'
 
 export const SCHEMA_VERSION = '1.0'
@@ -50,7 +52,8 @@ export function nodeCell(node) {
       body: { stroke: meta.color, strokeWidth: 1.5, fill: '#ffffff', rx: 6, ry: 6 },
       label: { fill: '#303133', fontSize: 13 },
     },
-    data: { type: node.type, title: node.title || '', config: structuredClone(node.config || {}) },
+    // node 可能来自 Vue 响应式对象（图定义存在 ref 里），structuredClone 不接受代理，故先 toRaw
+    data: { type: node.type, title: node.title || '', config: structuredClone(toRaw(node.config) || {}) },
     ports: { groups: structuredClone(PORT_GROUPS), items: portItems(node) },
   }
 }

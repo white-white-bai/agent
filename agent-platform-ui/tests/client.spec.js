@@ -78,6 +78,16 @@ describe('request', () => {
     expect(init.body).toBe('{"app_name":"a"}')
   })
 
+  it('passes FormData through without a JSON content type', async () => {
+    const fetchMock = mockFetch({ payload: { data: null } })
+    const form = new FormData()
+    form.append('file', new Blob(['x']), 'a.txt')
+    await request('/admin/documents/upload', { method: 'POST', body: form })
+    const [, init] = fetchMock.mock.calls[0]
+    expect(init.body).toBe(form)
+    expect(init.headers['Content-Type']).toBeUndefined()
+  })
+
   it('omits the authorization header and body when absent', async () => {
     const fetchMock = mockFetch({ payload: { data: [] } })
     await request('/admin/apps', { params: { tenant_code: 't1' } })

@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { getApp, getGraph, importGraph, listGraphVersions, publishGraph, rollbackGraph, saveGraphDraft } from '@/api'
+import { getApp, getGraph, importGraph, importGraphFile, listGraphVersions, listProviders, publishGraph, rollbackGraph, saveGraphDraft } from '@/api'
 import GraphCanvas from '@/components/GraphCanvas.vue'
 import NodeInspector from '@/components/NodeInspector.vue'
 import NodePalette from '@/components/NodePalette.vue'
@@ -24,10 +24,23 @@ const busy = ref(false)
 const versionDialog = ref(false)
 const versions = ref([])
 const importDialog = ref(false)
-const importForm = ref({ content: '', llm_provider: 'cloud_gateway', retriever: 'builtin', name: '' })
+const importForm = ref({ content: '', llm_provider: '', retriever: 'builtin', name: '' })
+const importFile = ref(null)
 const importWarnings = ref([])
+// 可用模型条目（AP_LLM_MODELS），供节点检查器与导入对话框下拉使用
+const modelOptions = ref([])
 
 const title = computed(() => (app.value && app.value.app_name) || appUuid)
+
+async function loadModelOptions() {
+  try {
+    const data = await listProviders()
+    return ((data && data.llm) || []).map((item) => ({ value: item.name, label: item.label || item.name }))
+  } catch {
+    // 拿不到模型清单不阻断编辑器
+    return []
+  }
+}
 
 async function load() {
   busy.value = true
@@ -38,6 +51,7 @@ async function load() {
     selected.value = null
     dirty.value = false
     ready.value = true
+    modelOptions.value = await loadModelOptions()
   } catch (error) {
     ElMessage.error(error.message || '加载失败')
   } finally {
@@ -124,23 +138,39 @@ async function rollback(row) {
 }
 
 async function runImport() {
-  if (!importForm.value.content) {
-    ElMessage.warning('请粘贴 Dify DSL 内容')
+  if (!importFile.value && !importForm.value.content) {
+    ElMessage.warning('请选择 DSL 文件或粘贴 DSL 内容')
     return
   }
   busy.value = true
   try {
-    const result = await importGraph(appUuid, { ...importForm.value })
+    const result = importFile.value
+      ? await importGraphFile(appUuid, buildImportFormData())
+      : await importGraph(appUuid, { ...importForm.value })
     importWarnings.value = (result && result.warnings) || []
     loadIntoCanvas(result && result.definition)
     dirty.value = false
     importDialog.value = false
+    importFile.value = null
     ElMessage.success('导入完成，草稿已更新')
   } catch (error) {
     ElMessage.error(error.message || '导入失败')
   } finally {
     busy.value = false
   }
+}
+
+function buildImportFormData() {
+  const form = new FormData()
+  form.append('file', importFile.value)
+  form.append('llm_provider', importForm.value.llm_provider)
+  form.append('retriever', importForm.value.retriever)
+  form.append('name', importForm.value.name || '')
+  return form
+}
+
+function onImportFileChange(file) {
+  importFile.value = file.raw
 }
 
 function onAdd(type) {
@@ -199,7 +229,7 @@ function onRemove(id) {
         <GraphCanvas v-if="ready" ref="canvas" :definition="definition" @select="onSelect" @change="dirty = true" />
       </div>
       <div class="editor__inspector">
-        <NodeInspector :node="selected" @update="onUpdate" @remove="onRemove" />
+        <NodeInspector :node="selected" :model-options="modelOptions" @update="onUpdate" @remove="onRemove" />
       </div>
     </div>
 
@@ -218,13 +248,17 @@ function onRemove(id) {
 
     <el-dialog v-model="importDialog" title="导入 Dify DSL" width="640px">
       <el-form label-position="top">
-        <el-form-item label="DSL 内容（YAML 或 JSON）">
-          <el-input v-model="importForm.content" type="textarea" :rows="10" />
+        <el-form-item label="DSL 文件（.yml / .yaml / .json，选择后优先于下方内容）">
+          <el-upload :auto-upload="false" :show-file-list="true" :limit="1" accept=".yml,.yaml,.json" :on-change="onImportFileChange" :on-remove="() => (importFile = null)">
+            <el-button>选择文件</el-button>
+          </el-upload>
         </el-form-item>
-        <el-form-item label="LLM provider">
-          <el-select v-model="importForm.llm_provider">
-            <el-option label="cloud_gateway" value="cloud_gateway" />
-            <el-option label="openai" value="openai" />
+        <el-form-item label="DSL 内容（YAML 或 JSON，未选文件时使用）">
+          <el-input v-model="importForm.content" type="textarea" :rows="10" :disabled="Boolean(importFile)" />
+        </el-form-item>
+        <el-form-item label="模型（AP_LLM_MODELS 条目）">
+          <el-select v-model="importForm.llm_provider" clearable placeholder="留空用清单第一个">
+            <el-option v-for="item in modelOptions" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
         </el-form-item>
         <el-form-item label="检索 provider">

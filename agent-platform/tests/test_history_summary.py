@@ -36,9 +36,9 @@ class RecordingLLM:
         self.fail = fail
         self.calls: list[dict] = []
 
-    async def __call__(self, *, provider, model, system_prompt, user_prompt, temperature, max_tokens):
+    async def __call__(self, *, provider, system_prompt, user_prompt, temperature, max_tokens):
         self.calls.append(
-            {"provider": provider, "model": model, "system_prompt": system_prompt, "user_prompt": user_prompt}
+            {"provider": provider, "system_prompt": system_prompt, "user_prompt": user_prompt}
         )
         if self.fail:
             raise RuntimeError("模型不可用")
@@ -50,8 +50,7 @@ async def _summarize(conversation, window=2, llm=None, max_chars=4000) -> str:
         conversation,
         window,
         llm or RecordingLLM(),
-        provider="cloud_gateway",
-        model="m1",
+        provider="",
         max_chars=max_chars,
     )
 
@@ -186,7 +185,7 @@ def test_chat_injects_summary_once_history_overflows_window(seed_app, client, mo
     monkeypatch.setattr(
         main_mod,
         "get_settings",
-        lambda: Settings(history_window=2, history_summary_enabled=True, history_summary_model="m1"),
+        lambda: Settings(history_window=2, history_summary_enabled=True),
     )
     seen = _capture_stream(monkeypatch)
 

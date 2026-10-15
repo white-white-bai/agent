@@ -13,7 +13,6 @@ class LLMInvoker(Protocol):
         self,
         *,
         provider: str,
-        model: str,
         system_prompt: str,
         user_prompt: str,
         temperature: float,
