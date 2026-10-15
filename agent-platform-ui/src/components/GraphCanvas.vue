@@ -15,18 +15,79 @@ const graph = shallowRef(null)
 
 let syncing = false
 let placed = 0
+let selectedEdge = null
+
+// 悬浮在连线上时显示「×」删除按钮（X6 内置工具），点击即删边
+const EDGE_REMOVE_TOOL = { name: 'button-remove', args: { distance: -32, offset: 0 } }
+
+function paintEdge(edge, active) {
+  edge.attr('line/stroke', active ? '#f56c6c' : '#a8abb2')
+  edge.attr('line/strokeWidth', active ? 2.5 : 1.5)
+}
+
+function selectEdge(edge) {
+  if (selectedEdge && selectedEdge !== edge) {
+    paintEdge(selectedEdge, false)
+  }
+  selectedEdge = edge || null
+  if (selectedEdge) {
+    paintEdge(selectedEdge, true)
+  }
+}
+
+function removeSelectedEdge() {
+  if (!selectedEdge || !graph.value) {
+    return false
+  }
+  const edge = selectedEdge
+  selectedEdge = null
+  graph.value.removeCell(edge)
+  return true
+}
+
+function onKeydown(event) {
+  if (event.key !== 'Delete' && event.key !== 'Backspace') {
+    return
+  }
+  const target = event.target
+  const tag = (target && target.tagName) || ''
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || (target && target.isContentEditable)) {
+    return
+  }
+  if (removeSelectedEdge()) {
+    event.preventDefault()
+  }
+}
 
 function binding() {
   const instance = graph.value
   if (!instance) {
     return
   }
-  instance.on('node:click', ({ node }) => emit('select', payloadOf(node)))
-  instance.on('blank:click', () => emit('select', null))
+  instance.on('node:click', ({ node }) => {
+    selectEdge(null)
+    emit('select', payloadOf(node))
+  })
+  instance.on('blank:click', () => {
+    selectEdge(null)
+    emit('select', null)
+  })
+  instance.on('edge:click', ({ edge }) => {
+    emit('select', null)
+    selectEdge(edge)
+  })
+  instance.on('edge:mouseenter', ({ edge }) => {
+    edge.removeTools()
+    edge.addTools(EDGE_REMOVE_TOOL)
+  })
+  instance.on('edge:mouseleave', ({ edge }) => edge.removeTools())
   instance.on('node:added', notify)
   instance.on('node:removed', notify)
   instance.on('edge:added', notify)
-  instance.on('edge:removed', notify)
+  instance.on('edge:removed', () => {
+    selectedEdge = null
+    notify()
+  })
   instance.on('edge:connected', notify)
   instance.on('cell:change:*', notify)
 }
@@ -55,6 +116,7 @@ function loadDefinition(definition) {
     return
   }
   syncing = true
+  selectedEdge = null
   instance.fromJSON(toCells(definition || {}))
   syncing = false
   placed = instance.getNodes().length
@@ -142,9 +204,11 @@ onMounted(async () => {
   })
   binding()
   loadDefinition(props.definition)
+  window.addEventListener('keydown', onKeydown)
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydown)
   if (graph.value) {
     graph.value.dispose()
     graph.value = null

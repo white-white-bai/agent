@@ -13,7 +13,8 @@ from agent_platform.core.config import Settings
 _TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 
 
-def _tokenize(text: str) -> list[str]:
+def tokenize(text: str) -> list[str]:
+    """分词：小写词 + 相邻双字 bigram（中英混排都能命中）。"""
     lowered = (text or "").lower()
     tokens = _TOKEN_RE.findall(lowered)
     for chunk in _TOKEN_RE.findall(lowered.replace(" ", "")):
@@ -24,7 +25,7 @@ def _tokenize(text: str) -> list[str]:
 
 def hash_embed(text: str, dim: int = 256) -> list[float]:
     vector = [0.0] * dim
-    for token in _tokenize(text):
+    for token in tokenize(text):
         digest = hashlib.md5(token.encode()).digest()
         index = int.from_bytes(digest[:4], "big") % dim
         sign = 1.0 if digest[4] % 2 == 0 else -1.0

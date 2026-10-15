@@ -10,7 +10,7 @@ agent 中台的独立管理端。Vue 3 + Vite + Element Plus + Pinia + vue-route
 | --- | --- | --- |
 | `/login` | `LoginView` | 登录，支持 `?redirect=` 回跳 |
 | `/apps` | `AppsView` | agent 应用注册（列表 / 新增 / 编辑 / 删除） |
-| `/apps/:appUuid/graph` | `GraphEditorView` | 图编辑器（AntV X6）、草稿保存、发布、版本回滚、Dify DSL 导入 |
+| `/apps/:appUuid/graph` | `GraphEditorView` | 图编辑器（AntV X6）、草稿保存、发布、版本回滚、Dify DSL 导入、运行（整图流式 SSE + 单节点运行） |
 | `/providers` | `ProvidersView` | 大模型 / 检索 / 向量 / 观测 provider 配置 |
 | `/mcp` | `McpServersView` | 工具（MCP server）配置 |
 | `/knowledge` | `KnowledgeView` | 知识库文档 |
@@ -40,17 +40,17 @@ Vite 默认只监听 `localhost`（IPv6 `::1`），浏览器请用 `http://local
 ## 目录
 
 ```
-src/api/          fetch 封装与全部管理接口（client.js 负责 token / 错误归一化）
+src/api/          fetch 封装与全部管理接口（client.js 负责 token / 错误归一化与 SSE 流式请求）
 src/graph/        nodeMeta.js 节点元数据；mapper.js 图定义 ⇄ X6 cell 的纯函数映射
 src/components/   BarChart、GraphCanvas（X6 胶水层）、NodePalette、NodeInspector 及字段编辑器
 src/composables/  useTable.js 列表加载 / 错误 / 分页的通用逻辑
 src/router/       index.js 路由表；guard.js 鉴权守卫（纯函数，便于单测）
-src/utils/        chart.js 图表数据归一与格式化
+src/utils/        chart.js 图表数据归一；sse.js SSE 分帧解析；run.js 运行对话框纯逻辑
 tests/            vitest 用例，纯逻辑与组件挂载各占一半
 ```
 
 ## 测试
 
-纯逻辑模块（mapper、nodeMeta、chart、guard、client、useTable、auth store）直接单测；组件用 `@vue/test-utils` 挂载，靠 `vm.$emit` 驱动 Element Plus 的 v-model 与 `@change`，不模拟真实键盘输入。`GraphCanvas.vue` 与 `GraphEditorView.vue` 依赖真实 X6 画布与路由参数，不做挂载测试，其可测逻辑已下沉到 `src/graph/mapper.js`。
+纯逻辑模块（mapper、nodeMeta、chart、guard、client、useTable、auth store、utils/sse、utils/run）直接单测；组件用 `@vue/test-utils` 挂载，靠 `vm.$emit` 驱动 Element Plus 的 v-model 与 `@change`，不模拟真实键盘输入。`GraphCanvas.vue` 与 `GraphEditorView.vue` 依赖真实 X6 画布与路由参数，不做挂载测试，其可测逻辑已下沉到 `src/graph/mapper.js`。
 
 拖拽与画布交互仍以手工验证为准。

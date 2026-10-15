@@ -432,28 +432,28 @@ def test_convert_degraded_node_rewires_edges():
     dsl = _dsl(
         nodes=[
             _node("start", "start", {"variables": []}),
-            _node("http_1", "http-request", {"url": "https://example.com"}),
+            _node("de", "document-extractor", {}),
             _node("answer_1", "answer", {"answer": "完"}),
         ],
-        edges=[_edge("start", "http_1"), _edge("http_1", "answer_1")],
+        edges=[_edge("start", "de"), _edge("de", "answer_1")],
     )
     result = convert(dsl)
     graph = GraphDef.model_validate(result.definition)
     assert [node.id for node in graph.nodes] == ["start1", "answer3"]
     assert [(edge.source, edge.target) for edge in graph.edges] == [("start1", "answer3")]
     assert result.stats["degraded"] == 1
-    assert any("http-request" in item for item in result.warnings)
+    assert any("document-extractor" in item for item in result.warnings)
 
 
 def test_convert_degraded_chain_rewires_transitively():
     dsl = _dsl(
         nodes=[
             _node("start", "start", {"variables": []}),
-            _node("qc", "question-classifier", {}),
-            _node("http_1", "http-request", {}),
+            _node("it", "iteration", {}),
+            _node("de", "document-extractor", {}),
             _node("answer_1", "answer", {"answer": "完"}),
         ],
-        edges=[_edge("start", "qc"), _edge("qc", "http_1"), _edge("http_1", "answer_1")],
+        edges=[_edge("start", "it"), _edge("it", "de"), _edge("de", "answer_1")],
     )
     graph = GraphDef.model_validate(convert(dsl).definition)
     assert [(edge.source, edge.target) for edge in graph.edges] == [("start1", "answer4")]
@@ -584,3 +584,219 @@ def test_load_dsl_from_file(tmp_path):
     assert convert(load_dsl(path)).stats["converted"] == 4
     with pytest.raises(DifyImportError):
         load_dsl(tmp_path / "missing.yml")
+
+
+# --------------------------------------------------------------------------- http / classifier / assigner / list
+
+
+def test_convert_http_request_node():
+    dsl = _dsl(
+        nodes=[
+            _node("start", "start", {"variables": [{"variable": "query", "type": "text-input"}]}),
+            _node(
+                "http_1",
+                "http-request",
+                {
+                    "method": "post",
+                    "url": "https://api.test/{{#start.query#}}",
+                    "headers": "Content-Type:application/json\nX-Token: abc",
+                    "params": "page:1",
+                    "authorization": {"type": "bearer", "config": {"api_key": "{{#start.query#}}"}},
+                    "body": {"type": "json", "data": [{"key": "q", "value": "{{#start.query#}}"}]},
+                    "timeout": 15,
+                },
+            ),
+            _node("answer_1", "answer", {"answer": "{{#http_1.body#}}"}),
+        ],
+        edges=[_edge("start", "http_1"), _edge("http_1", "answer_1")],
+    )
+    result = convert(dsl)
+    graph = GraphDef.model_validate(result.definition)
+    http = graph.node("http2").typed_config()
+    assert http.method == "POST"
+    assert http.url == "https://api.test/{{ query }}"
+    assert http.headers == {"Content-Type": "application/json", "X-Token": "abc", "Authorization": "Bearer {{ query }}"}
+    assert http.params == {"page": "1"}
+    assert http.body_type == "json"
+    assert json.loads(http.body) == {"q": "{{ query }}"}
+    assert http.timeout == 15
+    # http 是多字段输出：{{#http_1.body#}} 应改写成 http2.body
+    assert graph.node("answer3").typed_config().template == "{{ http2.body }}"
+    assert not any("不支持，已旁路" in item for item in result.warnings)
+
+
+def test_convert_http_request_rejects_unsupported_method():
+    dsl = _dsl(nodes=[_node("http_1", "http-request", {"method": "trace", "url": "https://x"})], edges=[])
+    result = convert(dsl)
+    assert GraphDef.model_validate(result.definition).node("http1").typed_config().method == "GET"
+    assert any("HTTP 方法 TRACE 不支持" in item for item in result.warnings)
+
+
+def test_convert_question_classifier_node():
+    dsl = _dsl(
+        nodes=[
+            _node("start", "start", {"variables": []}),
+            _node(
+                "cls",
+                "question-classifier",
+                {
+                    "query_variable_selector": ["start", "query"],
+                    "classes": [{"id": "billing", "name": "计费"}, {"id": "refund", "name": "退费"}],
+                    "instruction": "按意图分类",
+                    "model": {"provider": "openai", "completion_params": {"temperature": 0.1}},
+                },
+            ),
+            _node("a1", "answer", {"answer": "计费"}),
+            _node("a2", "answer", {"answer": "退费"}),
+        ],
+        edges=[_edge("start", "cls"), _edge("cls", "a1", handle="billing"), _edge("cls", "a2", handle="refund")],
+    )
+    result = convert(dsl)
+    graph = GraphDef.model_validate(result.definition)
+    cls = graph.node("classifier2").typed_config()
+    assert [(item.id, item.name) for item in cls.classes] == [("billing", "计费"), ("refund", "退费")]
+    assert cls.query == "{{ query }}"
+    assert cls.instruction == "按意图分类"
+    assert cls.temperature == 0.1
+    assert [e.source_handle for e in graph.edges if e.source == "classifier2"] == ["billing", "refund"]
+    assert not any("不支持，已旁路" in item for item in result.warnings)
+
+
+def test_convert_normalizes_dify_default_handles():
+    dsl = _dsl(
+        nodes=[
+            _node("start", "start", {"variables": []}),
+            _node("k1", "knowledge-retrieval", {"dataset_ids": []}),
+            _node("llm_1", "llm", {"prompt_template": []}),
+        ],
+        edges=[
+            {"id": "e1", "source": "start", "target": "k1", "sourceHandle": "source", "targetHandle": "target"},
+            {"id": "e2", "source": "k1", "target": "llm_1", "sourceHandle": "source", "targetHandle": "target"},
+        ],
+    )
+    graph = GraphDef.model_validate(convert(dsl).definition)
+    assert [edge.source_handle for edge in graph.edges] == ["", ""]
+
+
+def test_convert_variable_assigner_node():
+    dsl = _dsl(
+        nodes=[
+            _node("start", "start", {"variables": []}),
+            _node(
+                "set",
+                "variable-assigner",
+                {
+                    "items": [
+                        {"variable_selector": ["conversation", "total"], "value_selector": ["start", "query"]},
+                        {"variable_selector": ["conversation", "flag"], "value": "yes"},
+                    ]
+                },
+            ),
+        ],
+        edges=[_edge("start", "set")],
+    )
+    result = convert(dsl)
+    graph = GraphDef.model_validate(result.definition)
+    assigner = graph.node("assigner2").typed_config()
+    assert [(item.name, item.expression) for item in assigner.items] == [("total", "query"), ("flag", '"yes"')]
+    assert not any("不支持，已旁路" in item for item in result.warnings)
+
+
+def test_convert_variable_assigner_warns_on_unsupported_operation():
+    dsl = _dsl(
+        nodes=[
+            _node("start", "start", {"variables": []}),
+            _node(
+                "set",
+                "variable-assigner",
+                {"items": [{"variable_selector": ["conversation", "n"], "value_selector": ["start", "query"], "operation": "+="}]},
+            ),
+        ],
+        edges=[_edge("start", "set")],
+    )
+    result = convert(dsl)
+    assert any("变量赋值操作 += 不支持" in item for item in result.warnings)
+
+
+def test_convert_list_operator_node():
+    dsl = _dsl(
+        nodes=[
+            _node("start", "start", {"variables": []}),
+            _node("k1", "knowledge-retrieval", {"dataset_ids": [], "query_variable_selector": ["start", "query"]}),
+            _node("lop", "list-operator", {"variable": ["k1", "result"], "operation": "limit", "limit": 2}),
+        ],
+        edges=[_edge("start", "k1"), _edge("k1", "lop")],
+    )
+    result = convert(dsl)
+    graph = GraphDef.model_validate(result.definition)
+    config = graph.node("listop3").typed_config()
+    assert config.variable == "knowledge2"
+    assert config.operation == "limit"
+    assert config.count == 2
+    assert not any("不支持，已旁路" in item for item in result.warnings)
+
+
+def test_convert_list_operator_unknown_operation_degrades():
+    dsl = _dsl(nodes=[_node("lop", "list-operator", {"operation": "slice", "variable": ["a", "b"]})], edges=[])
+    result = convert(dsl)
+    assert GraphDef.model_validate(result.definition).node("listop1").typed_config().operation == "first"
+    assert any("数组操作 slice 不支持" in item for item in result.warnings)
+
+
+def test_convert_llm_context_expands_in_place():
+    dsl = _dsl(
+        nodes=[
+            _node("start", "start", {"variables": []}),
+            _node("k1", "knowledge-retrieval", {"dataset_ids": [], "query_variable_selector": ["start", "query"]}),
+            _node(
+                "llm_1",
+                "llm",
+                {
+                    "context": {"enabled": True, "variable_selector": ["k1", "result"]},
+                    "prompt_template": [{"role": "user", "text": "{{#context#}}"}],
+                },
+            ),
+        ],
+        edges=[_edge("start", "k1"), _edge("k1", "llm_1")],
+    )
+    result = convert(dsl)
+    graph = GraphDef.model_validate(result.definition)
+    llm = graph.node("llm3").typed_config()
+    assert llm.user_prompt == "{{ knowledge2 }}"
+    assert llm.context == ""
+
+
+def test_convert_llm_context_uses_field_when_prompt_has_no_context_var():
+    dsl = _dsl(
+        nodes=[
+            _node("start", "start", {"variables": []}),
+            _node("k1", "knowledge-retrieval", {"dataset_ids": [], "query_variable_selector": ["start", "query"]}),
+            _node(
+                "llm_1",
+                "llm",
+                {
+                    "context": {"enabled": True, "variable_selector": ["k1", "result"]},
+                    "prompt_template": [{"role": "user", "text": "请回答 {{#sys.query#}}"}],
+                },
+            ),
+        ],
+        edges=[_edge("start", "k1"), _edge("k1", "llm_1")],
+    )
+    result = convert(dsl)
+    graph = GraphDef.model_validate(result.definition)
+    assert graph.node("llm3").typed_config().context == "knowledge2"
+
+
+def test_convert_adds_placeholders_for_runtime_variables():
+    dsl = _dsl(
+        nodes=[
+            _node("start", "start", {"variables": [{"variable": "query", "type": "text-input"}]}),
+            _node("llm_1", "llm", {"prompt_template": [{"role": "user", "text": "{{#sys.user_id#}} 问 {{#sys.query#}}"}]}),
+        ],
+        edges=[_edge("start", "llm_1")],
+    )
+    result = convert(dsl)
+    graph = GraphDef.model_validate(result.definition)
+    names = [item.name for item in graph.inputs]
+    assert names == ["query", "user_id"]
+    assert graph.node("llm2").typed_config().user_prompt == "{{ user_id }} 问 {{ query }}"

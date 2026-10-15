@@ -175,6 +175,96 @@ export const NODE_TYPES = [
     ],
     defaults: () => ({ variables: [], template: '', output_var: 'output' }),
   },
+  {
+    type: 'http-request',
+    label: 'HTTP 请求',
+    color: '#0aa2c0',
+    summary: '发 HTTP 请求，输出 body / status_code / headers',
+    fields: [
+      { key: 'method', label: '方法', kind: 'select', options: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'] },
+      { key: 'url', label: 'URL', kind: 'text', placeholder: '支持 {{ 变量 }}' },
+      { key: 'headers', label: '请求头', kind: 'keyvalue' },
+      { key: 'params', label: 'Query 参数', kind: 'keyvalue' },
+      { key: 'body_type', label: '请求体类型', kind: 'select', options: ['none', 'json', 'text'] },
+      { key: 'body', label: '请求体', kind: 'textarea', rows: 4 },
+      { key: 'timeout', label: '超时（秒）', kind: 'number', min: 1 },
+      { key: 'output_var', label: '输出变量', kind: 'text' },
+    ],
+    defaults: () => ({
+      method: 'GET',
+      url: '',
+      headers: {},
+      params: {},
+      body_type: 'none',
+      body: '',
+      timeout: 30,
+      output_var: 'http',
+    }),
+  },
+  {
+    type: 'question-classifier',
+    label: '问题分类',
+    color: '#d48806',
+    summary: 'LLM 判定类别，类别 id 驱动分支',
+    fields: [
+      { key: 'provider', label: '模型', kind: 'model-select', help: '来自 AP_LLM_MODELS 的模型条目；留空用清单第一个' },
+      { key: 'query', label: '待分类内容', kind: 'textarea', rows: 2 },
+      { key: 'instruction', label: '分类指令', kind: 'textarea', rows: 3 },
+      { key: 'classes', label: '类别（id 即分支句柄）', kind: 'rows', columns: [
+        { key: 'id', label: '类别 id', kind: 'text' },
+        { key: 'name', label: '类别名', kind: 'text' },
+      ] },
+      { key: 'temperature', label: 'temperature', kind: 'number', step: 0.1, min: 0, max: 2 },
+      { key: 'max_tokens', label: 'max_tokens', kind: 'number', min: 1, nullable: true },
+      { key: 'output_var', label: '输出变量', kind: 'text' },
+    ],
+    defaults: () => ({
+      provider: '',
+      query: '{{ query }}',
+      instruction: '',
+      classes: [{ id: 'class_1', name: '类别一' }],
+      temperature: 0,
+      max_tokens: null,
+      output_var: 'class_name',
+    }),
+  },
+  {
+    type: 'variable-assigner',
+    label: '变量赋值',
+    color: '#7a5af8',
+    summary: '对表达式求值后写入同名变量',
+    fields: [
+      { key: 'items', label: '赋值项', kind: 'rows', columns: [
+        { key: 'name', label: '变量名', kind: 'text' },
+        { key: 'expression', label: '表达式', kind: 'text' },
+      ] },
+    ],
+    defaults: () => ({ items: [] }),
+  },
+  {
+    type: 'list-operator',
+    label: '数组操作',
+    color: '#c41d7f',
+    summary: '取首/尾/下标/截取/筛选/排序/长度',
+    fields: [
+      { key: 'variable', label: '数组表达式', kind: 'text', placeholder: '如 knowledge_1 或 chunks' },
+      { key: 'operation', label: '操作', kind: 'select', options: ['first', 'last', 'at', 'limit', 'filter', 'sort', 'size'] },
+      { key: 'index', label: '下标（at）', kind: 'number' },
+      { key: 'count', label: '数量（limit）', kind: 'number', min: 0 },
+      { key: 'expression', label: '元素表达式（filter/sort）', kind: 'text', placeholder: '如 item > 3 或 item.score' },
+      { key: 'desc', label: '降序（sort）', kind: 'boolean' },
+      { key: 'output_var', label: '输出变量', kind: 'text' },
+    ],
+    defaults: () => ({
+      variable: '',
+      operation: 'first',
+      index: 0,
+      count: 3,
+      expression: '',
+      desc: false,
+      output_var: 'list_result',
+    }),
+  },
 ]
 
 const BY_TYPE = new Map(NODE_TYPES.map((meta) => [meta.type, meta]))
@@ -199,4 +289,9 @@ export function conditionPorts(config) {
     ports.push(config.fallback_id)
   }
   return ports
+}
+
+export function classifierPorts(config) {
+  const classes = Array.isArray(config && config.classes) ? config.classes : []
+  return classes.filter((item) => item && item.id).map((item) => item.id)
 }

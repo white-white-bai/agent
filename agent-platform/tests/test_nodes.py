@@ -1,6 +1,8 @@
 """节点执行：知识 / 工具 / 代码 / 聚合 / 条件 / 结束 与受限代码沙箱。"""
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from agent_platform.engine import nodes
@@ -367,6 +369,180 @@ def test_run_code_wraps_runtime_errors():
 def test_run_code_wraps_syntax_errors():
     with pytest.raises(CodeExecutionError, match="代码节点执行失败"):
         run_code(CodeConfig(code="def main(**inputs)\n    return {}\n"), {})
+
+
+# --------------------------------------------------------------------------- http / classifier / assigner / list
+
+
+class _FakeResponse:
+    def __init__(self, payload, status: int = 200) -> None:
+        self._payload = payload
+        self.status_code = status
+        self.headers = {"X-Test": "1"}
+        self.text = payload if isinstance(payload, str) else json.dumps(payload)
+
+    def json(self):
+        # 文本响应 json() 会抛 JSONDecodeError（ValueError 子类），与 httpx 行为一致
+        return json.loads(self.text)
+
+
+class _FakeClient:
+    def __init__(self, response: _FakeResponse, captured: dict) -> None:
+        self._response = response
+        self._captured = captured
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def request(self, method, url, **kwargs):
+        self._captured.update({"method": method, "url": url, **kwargs})
+        return self._response
+
+
+async def test_run_llm_appends_knowledge_context():
+    llm = RecordingLLM()
+    node = _node("llm-1", NodeType.LLM, context="chunks", user_prompt="{{ query }}")
+    state = await nodes.run_llm(
+        node,
+        {"variables": {"query": "问", "chunks": [{"content": "段一"}, {"content": "段二"}]}},
+        EngineContext(llm=llm),
+    )
+    assert llm.calls[0]["user_prompt"] == "问\n\n参考上下文：\n段一\n段二"
+    assert state["variables"]["text"] == "模型回答"
+
+
+@pytest.mark.asyncio
+async def test_run_http_request_renders_and_exposes_fields(monkeypatch):
+    captured: dict = {}
+    response = _FakeResponse({"ok": True, "id": 7})
+    monkeypatch.setattr(nodes.httpx, "AsyncClient", lambda **kwargs: _FakeClient(response, captured))
+    node = _node(
+        "http1",
+        NodeType.HTTP_REQUEST,
+        method="POST",
+        url="https://api.test/{{ path }}",
+        headers={"X-A": "{{ query }}"},
+        params={"q": "{{ query }}"},
+        body_type="json",
+        body='{"q": "{{ query }}"}',
+        output_var="http",
+    )
+    state = await nodes.run_http_request(
+        node, {"variables": {"query": "甲", "path": "items"}}, EngineContext(llm=RecordingLLM())
+    )
+    assert captured["method"] == "POST"
+    assert captured["url"] == "https://api.test/items"
+    assert captured["headers"] == {"X-A": "甲"}
+    assert captured["params"] == {"q": "甲"}
+    assert captured["json"] == {"q": "甲"}
+    assert state["variables"]["http"]["body"] == {"ok": True, "id": 7}
+    assert state["variables"]["http"]["status_code"] == 200
+    assert state["variables"]["http1"] == state["variables"]["http"]
+
+
+@pytest.mark.asyncio
+async def test_run_http_request_falls_back_to_text_body(monkeypatch):
+    captured: dict = {}
+    response = _FakeResponse("raw text")
+    monkeypatch.setattr(nodes.httpx, "AsyncClient", lambda **kwargs: _FakeClient(response, captured))
+    node = _node("http1", NodeType.HTTP_REQUEST, method="GET", url="https://api.test/x", body_type="json", body="not-json")
+    state = await nodes.run_http_request(node, {"variables": {}}, EngineContext(llm=RecordingLLM()))
+    assert captured["content"] == "not-json"
+    assert state["variables"]["http"]["body"] == "raw text"
+
+
+@pytest.mark.asyncio
+async def test_run_http_request_requires_url():
+    with pytest.raises(ValueError, match="缺少 url"):
+        await nodes.run_http_request(_node("http1", NodeType.HTTP_REQUEST, url="  "), {}, EngineContext(llm=RecordingLLM()))
+
+
+@pytest.mark.asyncio
+async def test_run_question_classifier_routes_to_matched_class():
+    class _LLM:
+        def __init__(self) -> None:
+            self.prompt = ""
+
+        async def __call__(self, **kwargs):
+            self.prompt = kwargs["system_prompt"]
+            return "退费"
+
+    llm = _LLM()
+    node = _node(
+        "classifier1",
+        NodeType.QUESTION_CLASSIFIER,
+        classes=[{"id": "billing", "name": "计费"}, {"id": "refund", "name": "退费"}],
+        output_var="class_name",
+    )
+    state = await nodes.run_question_classifier(node, {"variables": {"query": "我要退款"}}, EngineContext(llm=llm))
+    assert state["route"] == "refund"
+    assert state["variables"]["class_name"] == "refund"
+    assert "计费" in llm.prompt and "只输出类别 id" in llm.prompt
+
+
+@pytest.mark.asyncio
+async def test_run_question_classifier_matches_id_and_falls_back():
+    class _IdLLM:
+        async def __call__(self, **kwargs):
+            return "  BILLING  "
+
+    node = _node("c", NodeType.QUESTION_CLASSIFIER, classes=[{"id": "billing", "name": "计费"}, {"id": "other", "name": "其它"}])
+    variables = {"query": "问题"}
+    state = await nodes.run_question_classifier(node, {"variables": variables}, EngineContext(llm=_IdLLM()))
+    assert state["route"] == "billing"
+
+    class _UnknownLLM:
+        async def __call__(self, **kwargs):
+            return "说不清"
+
+    fallback = await nodes.run_question_classifier(node, {"variables": variables}, EngineContext(llm=_UnknownLLM()))
+    assert fallback["route"] == "billing"
+
+
+@pytest.mark.asyncio
+async def test_run_question_classifier_requires_classes():
+    with pytest.raises(ValueError, match="未定义类别"):
+        await nodes.run_question_classifier(_node("c", NodeType.QUESTION_CLASSIFIER), {}, EngineContext(llm=RecordingLLM()))
+
+
+def test_run_variable_assigner_writes_named_variables():
+    node = _node(
+        "assigner1",
+        NodeType.VARIABLE_ASSIGNER,
+        items=[{"name": "total", "expression": "1 + 2"}, {"name": "label", "expression": "query"}],
+    )
+    state = nodes.run_variable_assigner(node, {"variables": {"query": "甲"}}, EngineContext(llm=RecordingLLM()))
+    assert state["variables"]["total"] == 3
+    assert state["variables"]["label"] == "甲"
+    assert state["variables"]["assigner1"] == {"total": 3, "label": "甲"}
+
+
+def _list_result(config: dict, variables: dict | None = None):
+    node = _node("list1", NodeType.LIST_OPERATOR, **config)
+    return nodes.run_list_operator(node, {"variables": variables or {}}, EngineContext(llm=RecordingLLM()))["variables"][
+        "list_result"
+    ]
+
+
+def test_run_list_operator_basic_operations():
+    data = {"items": [3, 1, 2]}
+    assert _list_result({"variable": "items", "operation": "first"}, data) == 3
+    assert _list_result({"variable": "items", "operation": "last"}, data) == 2
+    assert _list_result({"variable": "items", "operation": "at", "index": 1}, data) == 1
+    assert _list_result({"variable": "items", "operation": "at", "index": 9}, data) is None
+    assert _list_result({"variable": "items", "operation": "limit", "count": 2}, data) == [3, 1]
+    assert _list_result({"variable": "items", "operation": "size"}, data) == 3
+    assert _list_result({"variable": "items", "operation": "sort"}, data) == [1, 2, 3]
+    assert _list_result({"variable": "items", "operation": "sort", "desc": True}, data) == [3, 2, 1]
+
+
+def test_run_list_operator_filter_and_empty_source():
+    data = {"items": [{"score": 5}, {"score": 9}]}
+    assert _list_result({"variable": "items", "operation": "filter", "expression": "item.score > 6"}, data) == [{"score": 9}]
+    assert _list_result({"variable": "", "operation": "size"}) == 0
 
 
 def test_run_code_blocks_imports_and_print():

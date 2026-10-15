@@ -17,6 +17,33 @@ def test_graph_def_validates_node_config():
     assert graph.node("llm").typed_config().provider == "qwen"
 
 
+def test_graph_def_validates_new_node_configs():
+    graph = GraphDef.model_validate(
+        {
+            "nodes": [
+                {"id": "start", "type": "start"},
+                {"id": "http", "type": "http-request", "config": {"method": "post", "url": "https://x", "body_type": "json"}},
+                {"id": "cls", "type": "question-classifier", "config": {"classes": [{"id": "a", "name": "甲"}]}},
+                {"id": "assign", "type": "variable-assigner", "config": {"items": [{"name": "n", "expression": "1"}]}},
+                {"id": "lop", "type": "list-operator", "config": {"operation": "sort", "desc": True}},
+            ]
+        }
+    )
+    assert graph.node("http").typed_config().method == "POST"
+    assert graph.node("cls").typed_config().classes[0].id == "a"
+    assert graph.node("assign").typed_config().items[0].name == "n"
+    assert graph.node("lop").typed_config().desc is True
+
+
+def test_llm_config_accepts_context_and_rejects_bad_types():
+    from agent_platform.graph.schema import LLMConfig
+
+    assert LLMConfig.model_validate({"context": "chunks"}).context == "chunks"
+    assert LLMConfig.model_validate({}).context == ""
+    with pytest.raises(ValidationError):
+        LLMConfig.model_validate({"temperature": "hot"})
+
+
 def test_graph_def_rejects_duplicate_node_ids():
     with pytest.raises(ValidationError):
         GraphDef.model_validate(

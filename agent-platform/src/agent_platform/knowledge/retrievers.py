@@ -44,6 +44,9 @@ def build_retriever(settings: Settings) -> Retriever:
                 dataset_ids=config.dataset_ids,
                 top_k=config.top_k,
                 score_threshold=config.score_threshold,
+                coarse_top_k=config.coarse_top_k,
+                hybrid=config.hybrid,
+                rerank=config.rerank,
             )
         if config.retriever == "light_rag":
             return await _http_retrieve(

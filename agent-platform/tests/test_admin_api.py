@@ -1,6 +1,8 @@
 """中台管理端 API：应用注册表 / 图草稿-发布-回滚 / 敏感词 / MCP Server / 文档 / provider。"""
 from __future__ import annotations
 
+import json
+
 from agent_platform.core.config import get_settings
 
 
@@ -255,11 +257,11 @@ def test_import_graph_reports_degraded_nodes(api_client):
     created = _create_app(api_client)
     dsl = _dify_dsl()
     dsl["workflow"]["graph"]["nodes"].insert(
-        2, {"id": "http_1", "data": {"type": "http-request", "title": "HTTP"}}
+        2, {"id": "de_1", "data": {"type": "document-extractor", "title": "文档提取"}}
     )
     data = api_client.post(f"/admin/apps/{created['uuid']}/graph/import", json={"dsl": dsl}).json()["data"]
     assert data["stats"] == {"total": 4, "converted": 3, "degraded": 1}
-    assert any("http-request" in item for item in data["warnings"])
+    assert any("document-extractor" in item for item in data["warnings"])
 
 
 def test_import_graph_rejects_bad_dsl_and_missing_app(api_client):
@@ -361,8 +363,9 @@ def test_upload_document_rejects_bad_suffix_and_empty_file(api_client):
 
 
 def test_list_providers_reports_configured_flags(api_client, monkeypatch):
-    monkeypatch.setenv("AP_LLM_MODELS", "{}")
-    get_settings.cache_clear()
+    # 直接改缓存实例上的字段：字典类配置从 .env 读，monkeypatch.setenv 盖不住（pydantic-settings 的坑）
+    settings = get_settings()
+    monkeypatch.setattr(settings, "llm_models", {})
     data = api_client.get("/admin/providers").json()["data"]
     assert data["llm"] == []
     assert [row["name"] for row in data["retriever"]] == ["builtin", "light_rag", "knowflow", "knowledge_graph"]
@@ -370,29 +373,210 @@ def test_list_providers_reports_configured_flags(api_client, monkeypatch):
     assert data["embedding"]["name"] == "hash"
     assert data["observability"]["configured"] is False
 
-    monkeypatch.setenv(
-        "AP_LLM_MODELS",
-        '{"deepseek": {"label": "DeepSeek", "base_url": "https://api.deepseek.com/v1",'
-        ' "api_key": "sk-x", "model": "deepseek-chat"}}',
+    monkeypatch.setattr(
+        settings,
+        "llm_models",
+        {
+            "deepseek": {
+                "label": "DeepSeek",
+                "base_url": "https://api.deepseek.com/v1",
+                "api_key": "sk-x",
+                "model": "deepseek-chat",
+            }
+        },
     )
-    monkeypatch.setenv("AP_KNOWFLOW_BASE_URL", "http://knowflow.internal")
-    monkeypatch.setenv("AP_EMBEDDING_BASE_URL", "http://embed.internal")
-    monkeypatch.setenv("AP_EMBEDDING_MODEL", "bge-m3")
+    monkeypatch.setattr(settings, "knowflow_base_url", "http://knowflow.internal")
+    monkeypatch.setattr(settings, "embedding_base_url", "http://embed.internal")
+    monkeypatch.setattr(settings, "embedding_model", "bge-m3")
+    data = api_client.get("/admin/providers").json()["data"]
+    assert data["llm"] == [
+        {
+            "name": "deepseek",
+            "label": "DeepSeek",
+            "configured": True,
+            "detail": "https://api.deepseek.com/v1",
+        }
+    ]
+    assert data["retriever"][2]["configured"] is True and data["retriever"][1]["configured"] is False
+    assert data["embedding"] == {"name": "remote", "configured": True, "detail": "bge-m3"}
+
+
+def _xlsx_bytes() -> bytes:
+    import io
+
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["地区", "数量"])
+    sheet.append(["常州", 3])
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+def test_upload_document_accepts_xlsx(api_client):
+    response = _upload(
+        api_client, "/admin/documents/upload", "表格.xlsx", _xlsx_bytes(), tenant_code="t", dataset_id="d1"
+    )
+    assert response.status_code == 200
+    assert response.json()["data"]["chunks"] >= 1
+    rows = api_client.get("/admin/documents", params={"tenant_code": "t", "dataset_id": "d1"}).json()["data"]
+    assert any("常州" in row["content"] for row in rows)
+
+
+def test_upload_document_rejects_unsupported_suffix(api_client):
+    response = _upload(api_client, "/admin/documents/upload", "app.exe", b"x", tenant_code="t")
+    assert response.status_code == 400
+    assert "不支持的文件类型" in response.json()["detail"]
+
+
+def test_upload_document_enforces_configured_size_limit(api_client, monkeypatch):
+    monkeypatch.setenv("AP_DOCUMENT_MAX_BYTES", "32")
     get_settings.cache_clear()
     try:
-        data = api_client.get("/admin/providers").json()["data"]
-        assert data["llm"] == [
-            {
-                "name": "deepseek",
-                "label": "DeepSeek",
-                "configured": True,
-                "detail": "https://api.deepseek.com/v1",
-            }
-        ]
-        assert data["retriever"][2]["configured"] is True and data["retriever"][1]["configured"] is False
-        assert data["embedding"] == {"name": "remote", "configured": True, "detail": "bge-m3"}
+        response = _upload(api_client, "/admin/documents/upload", "big.txt", b"x" * 128, tenant_code="t")
+        assert response.status_code == 413
     finally:
         get_settings.cache_clear()
+
+
+def test_upload_document_reports_parse_failure(api_client):
+    response = _upload(api_client, "/admin/documents/upload", "bad.pdf", b"definitely not a pdf", tenant_code="t")
+    assert response.status_code == 400
+    assert "解析失败" in response.json()["detail"]
+
+
+def test_get_retrieval_config_endpoint(api_client, monkeypatch):
+    for key, value in (
+        ("AP_RETRIEVAL_COARSE_TOP_K", "20"),
+        ("AP_RETRIEVAL_HYBRID_ENABLED", "true"),
+        ("AP_RERANK_ENABLED", "true"),
+        ("AP_RERANK_BASE_URL", "https://rerank.local"),
+        ("AP_RERANK_MODEL", "bge-reranker"),
+    ):
+        monkeypatch.setenv(key, value)
+    get_settings.cache_clear()
+    try:
+        data = api_client.get("/admin/retrieval/config").json()["data"]
+        assert data["coarse_top_k"] == 20
+        assert data["hybrid_enabled"] is True
+        assert data["rerank_enabled"] is True
+        assert data["rerank_base_url"] == "https://rerank.local"
+        assert data["rerank_model"] == "bge-reranker"
+        assert data["document_max_bytes"] == 15 * 1024 * 1024
+    finally:
+        get_settings.cache_clear()
+
+
+# --------------------------------------------------------------------------- 图运行（编排调试）
+
+RUN_GRAPH = {
+    "nodes": [
+        {"id": "start1", "type": "start"},
+        {"id": "llm2", "type": "llm", "config": {"user_prompt": "{{ query }}", "output_var": "text"}},
+        {"id": "answer3", "type": "answer", "config": {"template": "{{ text }}"}},
+        {"id": "end4", "type": "end"},
+    ],
+    "edges": [
+        {"source": "start1", "target": "llm2"},
+        {"source": "llm2", "target": "answer3"},
+        {"source": "answer3", "target": "end4"},
+    ],
+}
+
+
+def test_run_node_executes_a_single_node(api_client):
+    created = _create_app(api_client)
+    response = api_client.post(
+        f"/admin/apps/{created['uuid']}/graph/run-node",
+        json={"node_id": "llm2", "definition": RUN_GRAPH, "inputs": {"query": "常州"}},
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["node_id"] == "llm2" and data["node_type"] == "llm"
+    assert data["output"] == "echo:常州"
+    assert data["variables"]["text"] == "echo:常州"
+
+
+def test_run_node_falls_back_to_answer_for_terminal_nodes(api_client):
+    created = _create_app(api_client)
+    response = api_client.post(
+        f"/admin/apps/{created['uuid']}/graph/run-node",
+        json={"node_id": "answer3", "definition": RUN_GRAPH, "inputs": {"query": "常州", "text": "现成文本"}},
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["answer"] == "现成文本"
+    assert data["output"] == "现成文本"
+
+
+def test_run_node_reports_missing_app_and_node(api_client):
+    created = _create_app(api_client)
+    missing_node = api_client.post(
+        f"/admin/apps/{created['uuid']}/graph/run-node",
+        json={"node_id": "ghost", "definition": RUN_GRAPH, "inputs": {}},
+    )
+    assert missing_node.status_code == 404
+    missing_app = api_client.post(
+        "/admin/apps/ghost/graph/run-node", json={"node_id": "llm2", "definition": RUN_GRAPH}
+    )
+    assert missing_app.status_code == 404
+
+
+def test_run_node_surfaces_execution_errors(api_client):
+    created = _create_app(api_client)
+    graph = {
+        "nodes": [
+            {"id": "start1", "type": "start"},
+            {"id": "llm2", "type": "llm", "config": {"user_prompt": "{{ missing_var }}"}},
+        ]
+    }
+    response = api_client.post(
+        f"/admin/apps/{created['uuid']}/graph/run-node",
+        json={"node_id": "llm2", "definition": graph, "inputs": {}},
+    )
+    assert response.status_code == 400
+    assert "节点执行失败" in response.json()["detail"]
+
+
+def test_run_node_requires_a_definition_or_draft(api_client):
+    created = _create_app(api_client)
+    response = api_client.post(f"/admin/apps/{created['uuid']}/graph/run-node", json={"node_id": "llm2"})
+    assert response.status_code == 400
+    assert "图定义为空" in response.json()["detail"]
+
+
+def test_run_node_rejects_invalid_definition(api_client):
+    created = _create_app(api_client)
+    response = api_client.post(
+        f"/admin/apps/{created['uuid']}/graph/run-node",
+        json={"node_id": "llm2", "definition": {"nodes": [{"id": "x", "type": "not-a-type"}]}},
+    )
+    assert response.status_code == 400
+    assert "图定义非法" in response.json()["detail"]
+
+
+def test_run_graph_streams_node_and_final_events(api_client):
+    created = _create_app(api_client)
+    response = api_client.post(
+        f"/admin/apps/{created['uuid']}/graph/run", json={"definition": RUN_GRAPH, "inputs": {"query": "常州"}}
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
+    types = [event["type"] for event in events]
+    assert "node_start" in types
+    assert types[-1] == "final"
+    assert [event["node"] for event in events if event["type"] == "node_start"][:1] == ["start1"]
+    final = events[-1]
+    assert final["answer"] == "echo:常州"
+    assert final["state"]["variables"]["text"] == "echo:常州"
+
+
+def test_run_graph_requires_an_existing_app(api_client):
+    response = api_client.post("/admin/apps/ghost/graph/run", json={"definition": RUN_GRAPH, "inputs": {}})
+    assert response.status_code == 404
 
 
 def test_get_guard_config_returns_effective_switches(api_client, monkeypatch):

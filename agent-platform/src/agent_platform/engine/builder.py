@@ -11,7 +11,7 @@ from agent_platform.engine.context import EngineContext
 from agent_platform.engine.state import GraphState
 from agent_platform.graph.schema import GraphDef, NodeDef, NodeType
 
-_RUNNERS: dict[NodeType, Callable] = {
+RUNNERS: dict[NodeType, Callable] = {
     NodeType.START: nodes.run_start,
     NodeType.END: nodes.run_end,
     NodeType.LLM: nodes.run_llm,
@@ -23,7 +23,20 @@ _RUNNERS: dict[NodeType, Callable] = {
     NodeType.ANSWER: nodes.run_answer,
     NodeType.PARAMETER_EXTRACTOR: nodes.run_parameter_extractor,
     NodeType.TEMPLATE_TRANSFORM: nodes.run_template_transform,
+    NodeType.HTTP_REQUEST: nodes.run_http_request,
+    NodeType.QUESTION_CLASSIFIER: nodes.run_question_classifier,
+    NodeType.VARIABLE_ASSIGNER: nodes.run_variable_assigner,
+    NodeType.LIST_OPERATOR: nodes.run_list_operator,
 }
+
+_ASYNC_TYPES = (
+    NodeType.LLM,
+    NodeType.KNOWLEDGE,
+    NodeType.TOOL,
+    NodeType.PARAMETER_EXTRACTOR,
+    NodeType.HTTP_REQUEST,
+    NodeType.QUESTION_CLASSIFIER,
+)
 
 
 def _tracer(ctx: EngineContext) -> Any:
@@ -32,10 +45,10 @@ def _tracer(ctx: EngineContext) -> Any:
 
 
 def _node_fn(node: NodeDef, ctx: EngineContext) -> Callable[[GraphState], Any]:
-    runner = _RUNNERS[node.type]
+    runner = RUNNERS[node.type]
     tracer = _tracer(ctx)
 
-    if node.type in (NodeType.LLM, NodeType.KNOWLEDGE, NodeType.TOOL, NodeType.PARAMETER_EXTRACTOR):
+    if node.type in _ASYNC_TYPES:
 
         async def afn(state: GraphState) -> GraphState:
             if tracer is None:
@@ -58,21 +71,27 @@ def _node_fn(node: NodeDef, ctx: EngineContext) -> Callable[[GraphState], Any]:
     return sfn
 
 
-def _condition_paths(graph_def: GraphDef, node: NodeDef) -> tuple[Callable, dict[str, str]]:
-    config = node.typed_config()
+def _route_paths(graph_def: GraphDef, node: NodeDef, fallback_id: str) -> tuple[Callable, dict[str, str]]:
     route_map: dict[str, str] = {}
     for edge in graph_def.outgoing(node.id):
-        key = edge.source_handle or config.fallback_id
+        key = edge.source_handle or fallback_id
         route_map[key] = edge.target
-
-    fallback_target = route_map.get(config.fallback_id, END)
-    route_map.setdefault(config.fallback_id, fallback_target)
+    route_map.setdefault(fallback_id, route_map.get(fallback_id, END))
 
     def route_fn(state: GraphState) -> str:
-        route = state.get("route") or config.fallback_id
-        return route if route in route_map else config.fallback_id
+        route = state.get("route") or fallback_id
+        return route if route in route_map else fallback_id
 
     return route_fn, route_map
+
+
+def _condition_paths(graph_def: GraphDef, node: NodeDef) -> tuple[Callable, dict[str, str]]:
+    return _route_paths(graph_def, node, node.typed_config().fallback_id)
+
+
+def _classifier_paths(graph_def: GraphDef, node: NodeDef) -> tuple[Callable, dict[str, str]]:
+    classes = node.typed_config().classes
+    return _route_paths(graph_def, node, classes[0].id if classes else "")
 
 
 def build_graph(graph_def: GraphDef, ctx: EngineContext, checkpointer: Any = None):
@@ -88,6 +107,9 @@ def build_graph(graph_def: GraphDef, ctx: EngineContext, checkpointer: Any = Non
     for node in graph_def.nodes:
         if node.type == NodeType.CONDITION:
             route_fn, path_map = _condition_paths(graph_def, node)
+            sg.add_conditional_edges(node.id, route_fn, path_map)
+        elif node.type == NodeType.QUESTION_CLASSIFIER:
+            route_fn, path_map = _classifier_paths(graph_def, node)
             sg.add_conditional_edges(node.id, route_fn, path_map)
         elif node.type == NodeType.END:
             sg.add_edge(node.id, END)

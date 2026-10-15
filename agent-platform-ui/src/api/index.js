@@ -1,4 +1,4 @@
-import { request } from './client'
+import { request, streamRequest } from './client'
 
 // 账号
 export const login = (username, password) => request('/admin/login', { method: 'POST', body: { username, password } })
@@ -29,6 +29,9 @@ export const rollbackGraph = (uuid, version) =>
 export const importGraph = (uuid, body) => request(`/admin/apps/${uuid}/graph/import`, { method: 'POST', body })
 export const importGraphFile = (uuid, formData) =>
   request(`/admin/apps/${uuid}/graph/import/file`, { method: 'POST', body: formData })
+export const runNode = (uuid, body) => request(`/admin/apps/${uuid}/graph/run-node`, { method: 'POST', body })
+export const runGraphStream = (uuid, body, onEvent, options) =>
+  streamRequest(`/admin/apps/${uuid}/graph/run`, body, onEvent, options)
 
 // 护栏：敏感词 + 进程级开关
 export const listSensitiveWords = (params) => request('/admin/sensitive-words', { params })
@@ -49,6 +52,7 @@ export const uploadDocument = (formData) => request('/admin/documents/upload', {
 
 // 模型 / 检索 provider
 export const listProviders = () => request('/admin/providers')
+export const getRetrievalConfig = () => request('/admin/retrieval/config')
 
 // 监控看板
 export const metricsOverview = (params) => request('/admin/metrics/overview', { params })

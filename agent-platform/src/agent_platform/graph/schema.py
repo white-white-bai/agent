@@ -38,6 +38,10 @@ class NodeType(str, Enum):
     ANSWER = "answer"
     PARAMETER_EXTRACTOR = "parameter-extractor"
     TEMPLATE_TRANSFORM = "template-transform"
+    HTTP_REQUEST = "http-request"
+    QUESTION_CLASSIFIER = "question-classifier"
+    VARIABLE_ASSIGNER = "variable-assigner"
+    LIST_OPERATOR = "list-operator"
 
 
 class Position(BaseModel):
@@ -56,6 +60,8 @@ class EndConfig(BaseModel):
 class LLMConfig(BaseModel):
     # provider 为 AP_LLM_MODELS 里的模型条目 key；留空用清单第一个
     provider: str = ""
+    # 知识上下文（裸表达式，如 knowledge3）；非空时把该变量拼进提示词
+    context: str = ""
     system_prompt: str = ""
     user_prompt: str = "{{ query }}"
     temperature: float = 0.7
@@ -70,6 +76,10 @@ class KnowledgeConfig(BaseModel):
     top_k: int = 5
     score_threshold: float | None = None
     output_var: str = "chunks"
+    # 检索流水线覆盖项：None = 用全局配置（AP_RETRIEVAL_* / AP_RERANK_*）
+    coarse_top_k: int | None = None
+    hybrid: bool | None = None
+    rerank: bool | None = None
 
 
 class ConditionBranch(BaseModel):
@@ -153,6 +163,64 @@ class TemplateTransformConfig(BaseModel):
     output_var: str = "output"
 
 
+class HttpRequestConfig(BaseModel):
+    """HTTP 请求：url/headers/params/body 支持模板，输出 {body, status_code, headers}。"""
+
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"] = "GET"
+    url: str = ""
+    headers: dict[str, str] = Field(default_factory=dict)
+    params: dict[str, str] = Field(default_factory=dict)
+    body_type: Literal["none", "json", "text"] = "none"
+    body: str = ""
+    timeout: int = 30
+    output_var: str = "http"
+
+    @field_validator("method", mode="before")
+    @classmethod
+    def _normalize_method(cls, value: Any) -> Any:
+        return value.upper() if isinstance(value, str) else value
+
+
+class ClassifierClass(BaseModel):
+    id: str
+    name: str
+
+
+class QuestionClassifierConfig(BaseModel):
+    """问题分类器：LLM 判定所属类别，类别 id 走 state['route'] 驱动分支。"""
+
+    provider: str = ""
+    query: str = "{{ query }}"
+    classes: list[ClassifierClass] = Field(default_factory=list)
+    instruction: str = ""
+    temperature: float = 0.0
+    max_tokens: int | None = None
+    output_var: str = "class_name"
+
+
+class AssignItem(BaseModel):
+    name: str
+    expression: str
+
+
+class VariableAssignerConfig(BaseModel):
+    """变量赋值：对每个 item 求值后写入同名变量。"""
+
+    items: list[AssignItem] = Field(default_factory=list)
+
+
+class ListOperatorConfig(BaseModel):
+    """数组操作：取首/尾/下标/截取/筛选/排序/长度。"""
+
+    variable: str = ""
+    operation: Literal["first", "last", "at", "limit", "filter", "sort", "size"] = "first"
+    index: int = 0
+    count: int = 3
+    expression: str = ""
+    desc: bool = False
+    output_var: str = "list_result"
+
+
 CONFIG_MODELS: dict[NodeType, type[BaseModel]] = {
     NodeType.START: StartConfig,
     NodeType.END: EndConfig,
@@ -165,6 +233,10 @@ CONFIG_MODELS: dict[NodeType, type[BaseModel]] = {
     NodeType.ANSWER: AnswerConfig,
     NodeType.PARAMETER_EXTRACTOR: ParameterExtractorConfig,
     NodeType.TEMPLATE_TRANSFORM: TemplateTransformConfig,
+    NodeType.HTTP_REQUEST: HttpRequestConfig,
+    NodeType.QUESTION_CLASSIFIER: QuestionClassifierConfig,
+    NodeType.VARIABLE_ASSIGNER: VariableAssignerConfig,
+    NodeType.LIST_OPERATOR: ListOperatorConfig,
 }
 
 

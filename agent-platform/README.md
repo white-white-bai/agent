@@ -54,7 +54,12 @@ agent-platform/
 - 图：`GET /apps/{uuid}/graph`、`PUT /apps/{uuid}/graph/draft`、`POST /apps/{uuid}/graph/publish`、
   `GET /apps/{uuid}/graph/versions`、`POST /apps/{uuid}/graph/rollback`、`POST /apps/{uuid}/graph/import`
   （Dify DSL 导入，见下；运行态只跑已发布版本）。
-- 配置：`/sensitive-words`、`/mcp-servers`、`/documents`（内置向量库）。
+- 图运行（编排调试，权限点 `graph:write`）：`POST /apps/{uuid}/graph/run-node`
+  （body `{node_id, definition?, inputs}`，单节点执行，返回该节点输出 / route）与
+  `POST /apps/{uuid}/graph/run`（body `{definition?, inputs}`，SSE 流式跑整张图，事件
+  `node_start` / `token` / `node_end` / `final` / `error`）。两者都以传入的 `definition` 为准，
+  缺省取当前草稿，**不写会话/消息**，也不影响对外 `/v1` 契约。
+- 配置：`/sensitive-words`、`/mcp-servers`、`/documents`（内置向量库，上传见下）、`/retrieval/config`（检索流水线只读回显）。
 - 账号：`POST /login`（免鉴权）、`GET /me`、`/users`、`/roles`（见下）。
 - 看板：`GET /metrics/overview`（见下）。
 
@@ -68,7 +73,7 @@ agent-platform/
 ```json
 {
   "deepseek": { "label": "DeepSeek", "base_url": "https://api.deepseek.com/v1", "api_key": "sk-...", "model": "deepseek-chat" },
-  "commandcode": { "label": "云端兼容", "base_url": "https://api.commandcode.ai/provider", "api_key": "sk-...", "model": "..." }
+  "commandcode": { "label": "云端兼容", "base_url": "https://api.commandcode.ai/provider/v1", "api_key": "user_...", "model": "deepseek/deepseek-v4.1-flash" }
 }
 ```
 
@@ -90,8 +95,9 @@ python -m agent_platform.importer app.yml --llm-provider deepseek --retriever li
 返回 `{stats, warnings, definition}`，`warnings` 逐条说明降级与需人工复核项。应用不存在 404，DSL 非法 400。
 
 - **可映射节点**：`start` / `end` / `llm` / `knowledge-retrieval` / `if-else` / `code`(python3) / `tool` /
-  `variable-aggregator` / `answer` / `parameter-extractor` / `template-transform`。
-- **降级**：其余节点（如 `http-request`、`iteration`、`question-classifier`、非 python3 的 `code`）旁路丢弃并提示，其前后边按
+  `variable-aggregator` / `answer` / `parameter-extractor` / `template-transform` /
+  `http-request` / `question-classifier` / `variable-assigner` / `list-operator`。
+- **降级**：其余节点（如 `iteration`、`loop`、`document-extractor`、非 python3 的 `code`）旁路丢弃并提示，其前后边按
   DFS 传递重连；`all of` / `any of` 等 Jinja2 无法表达的比较降为常量 `false` 并提示。
 - **变量引用**：Dify `{{#node.var#}}` 按目标字段语义改写 —— 模板字段（LLM 提示词、知识库 query、answer）还原为
   `{{ }}` 模板，表达式字段（end 输出、条件、code 入参、tool 参数）还原为裸表达式。
@@ -100,6 +106,39 @@ python -m agent_platform.importer app.yml --llm-provider deepseek --retriever li
 - **parameter-extractor**：按 Dify `parameters` 定义做 LLM 结构化提取（prompt 模式，`function_call` 会退化并提示），
   输出按参数名平铺到 `extractN.<name>`，并带 `__is_success` / `__reason`；JSON 解析失败降级为 `__is_success=0` 继续执行。
 - **template-transform**：`variables` 绑定本地变量名后渲染 Jinja2 模板，输出固定为 `tplN`（字符串）。
+- **http-request**：`headers` / `params`（Dify 的「每行 `key:value`」文本）解析成映射，`authorization` 映射为
+  `Authorization` 头（bearer）或自定义头 / query（api-key）；`body` 支持 json / raw-text，输出 `httpN.{body,status_code,headers}`。
+- **question-classifier**：`classes[].id` 同时作为出边的 `sourceHandle`，运行时把命中的类别 id 写入 `state.route` 驱动分支。
+- **variable-assigner**：Dify `items[].variable_selector` 的末段作为目标变量名，`value_selector`/`value` 作为取值表达式（非覆盖写操作会提示并降级为覆盖）。
+- **list-operator**：`variable` + `operation`（first / last / at / limit / filter / sort / size）映射；不识别的操作提示并退化为 `first`。
+- **LLM context**：Dify 节点勾选 `context` 时，提示词里的 `{{#context#}}` 会被就地展开成上下文变量；若提示词未引用 `{{#context#}}`，则落到节点的 `context` 字段（运行时拼进提示词）。
+
+## 知识库文档与检索流水线
+
+**上传入库**（`POST /admin/documents/upload`）支持：
+
+| 类型 | 后缀 | 抽取方式 |
+| --- | --- | --- |
+| 纯文本 | `.txt` `.md` `.markdown` `.mdx` `.csv` | 直接解码（UTF-8 优先，兼容 GB18030） |
+| 网页 | `.html` `.htm` | 去标签取正文（跳过 script/style） |
+| 文档 | `.pdf` | pypdf 逐页抽文本 |
+|  | `.docx` | python-docx 段落 + 表格 |
+| 表格 | `.xlsx` | openpyxl 逐 sheet 逐行 `cell | cell` |
+|  | `.xls` | xlrd 同上 |
+
+单文件上限由 `AP_DOCUMENT_MAX_BYTES` 控制（默认 15MB），按 `AP_DOCUMENT_CHUNK_CHARS` 分块、相邻块可保留
+`AP_DOCUMENT_CHUNK_OVERLAP` 字重叠；每个分块单独向量化后落 `ap_document`。
+
+**检索流水线**（`builtin` 检索器）：粗召回（向量）→ 精召回（混合，可选）→ 重排序（可选）→ 取 `top_k`。
+
+- **粗召回**：`AP_RETRIEVAL_COARSE_TOP_K` 控制向量候选数（0 表示直接用知识节点的 `top_k`），仍按节点 `score_threshold` 过滤。
+- **精召回（混合检索）**：`AP_RETRIEVAL_HYBRID_ENABLED=true` 时额外做关键词召回（查询词项命中数按文档长度开方归一），
+  两路用 RRF 融合（`AP_RETRIEVAL_RRF_K`、`AP_RETRIEVAL_LEXICAL_TOP_K`）。
+- **重排序**：`AP_RERANK_ENABLED=true` 且配了 `AP_RERANK_BASE_URL` 时，对候选调 `POST {base_url}/rerank`
+  （body `{model, query, documents, top_n}`，读 `{results:[{index, relevance_score}]}`），失败只记日志并回退。
+- **节点覆盖**：知识检索节点的 `coarse_top_k` / `hybrid` / `rerank` 可单独覆盖全局（留空用全局）。
+- 三者**默认全部关闭**，关闭时输出与只用向量检索逐字节一致。
+- 管理端 `GET /admin/retrieval/config` 只读回显上述配置（Providers 页展示）。
 
 ## 数据库与迁移
 

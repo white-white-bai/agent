@@ -136,6 +136,17 @@ class GraphImportRequest(BaseModel):
     save: bool = True
 
 
+class RunNodeRequest(BaseModel):
+    node_id: str
+    definition: dict[str, Any] | None = None
+    inputs: dict[str, Any] = Field(default_factory=dict)
+
+
+class RunGraphRequest(BaseModel):
+    definition: dict[str, Any] | None = None
+    inputs: dict[str, Any] = Field(default_factory=dict)
+
+
 class SensitiveWordCreateRequest(BaseModel):
     tenant_code: str = ""
     word: str

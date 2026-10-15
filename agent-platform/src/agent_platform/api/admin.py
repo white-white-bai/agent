@@ -1,14 +1,18 @@
 """中台管理端 API：应用注册表 / 图草稿-发布-回滚 / 护栏配置 / MCP Server / 知识库文档。"""
 from __future__ import annotations
 
+import json
 import uuid
+from collections.abc import AsyncIterator
 from pathlib import PurePath
 from typing import Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 
 from agent_platform.api import services
-from agent_platform.api.deps import get_current_admin, require_admin, require_permission
+from agent_platform.api.deps import get_current_admin, get_engine_context, require_admin, require_permission
 from agent_platform.api.schemas import (
     AppCreateRequest,
     AppUpdateRequest,
@@ -18,12 +22,17 @@ from agent_platform.api.schemas import (
     GraphPublishRequest,
     GraphRollbackRequest,
     McpServerCreateRequest,
+    RunGraphRequest,
+    RunNodeRequest,
     SensitiveWordCreateRequest,
 )
-from agent_platform.api.uploads import chunk_text, read_upload
+from agent_platform.api.uploads import chunk_text, read_document, read_upload
 from agent_platform.core import metrics
 from agent_platform.core.accounts import AdminPrincipal
 from agent_platform.core.config import get_settings
+from agent_platform.engine.context import EngineContext
+from agent_platform.engine.runtime import run_node, stream_graph
+from agent_platform.graph.schema import GraphDef
 from agent_platform.importer import DifyImportError, convert, parse_dsl
 from agent_platform.knowledge.embeddings import Embedder
 from agent_platform.knowledge.vector_store import add_document, delete_document
@@ -31,7 +40,11 @@ from agent_platform.knowledge.vector_store import add_document, delete_document
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
 DSL_SUFFIXES = {".yml", ".yaml", ".json"}
-DOCUMENT_SUFFIXES = {".txt", ".md", ".json", ".csv"}
+DOCUMENT_SUFFIXES = {
+    ".txt", ".md", ".markdown", ".mdx", ".csv",
+    ".html", ".htm",
+    ".pdf", ".docx", ".xlsx", ".xls",
+}
 
 
 def _app_dict(row: Any) -> dict[str, Any]:
@@ -354,8 +367,8 @@ async def upload_document(
     principal: AdminPrincipal = Depends(get_current_admin),
 ) -> dict[str, Any]:
     settings = get_settings()
-    content = await read_upload(file, DOCUMENT_SUFFIXES)
-    chunks = chunk_text(content, settings.document_chunk_chars)
+    content = await read_document(file, DOCUMENT_SUFFIXES)
+    chunks = chunk_text(content, settings.document_chunk_chars, settings.document_chunk_overlap)
     if not chunks:
         raise HTTPException(status_code=400, detail="文件内容为空")
     tenant = principal.scope_tenant(tenant_code or settings.default_tenant)
@@ -443,6 +456,27 @@ def list_providers() -> dict[str, Any]:
 
 # --------------------------------------------------------------------------- 护栏配置（进程级开关，只读）
 
+@router.get("/retrieval/config", dependencies=[Depends(require_permission("provider:read"))])
+def get_retrieval_config() -> dict[str, Any]:
+    """检索流水线配置（只读）：入库分块 / 粗召回 / 混合精召回 / 重排序。"""
+    settings = get_settings()
+    return {
+        "data": {
+            "chunk_chars": settings.document_chunk_chars,
+            "chunk_overlap": settings.document_chunk_overlap,
+            "document_max_bytes": settings.document_max_bytes,
+            "coarse_top_k": settings.retrieval_coarse_top_k,
+            "hybrid_enabled": settings.retrieval_hybrid_enabled,
+            "lexical_top_k": settings.retrieval_lexical_top_k,
+            "rrf_k": settings.retrieval_rrf_k,
+            "rerank_enabled": settings.rerank_enabled,
+            "rerank_base_url": settings.rerank_base_url,
+            "rerank_model": settings.rerank_model,
+            "rerank_top_k": settings.rerank_top_k,
+        }
+    }
+
+
 @router.get("/guard/config", dependencies=[Depends(require_permission("guard:read"))])
 def get_guard_config() -> dict[str, Any]:
     settings = get_settings()
@@ -471,3 +505,64 @@ def metrics_overview(
     principal: AdminPrincipal = Depends(get_current_admin),
 ) -> dict[str, Any]:
     return {"data": metrics.overview(tenant_code=principal.scope_tenant(tenant_code), app_uuid=app_uuid, days=days)}
+
+
+# --------------------------------------------------------------------------- 图运行（编排调试）
+
+def _resolve_run_definition(app_uuid: str, definition: dict[str, Any] | None) -> GraphDef:
+    raw = definition if definition else services.get_draft(app_uuid)
+    if not raw:
+        raise HTTPException(status_code=400, detail="图定义为空，请先保存草稿或传入 definition")
+    try:
+        return GraphDef.model_validate(raw)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=f"图定义非法: {exc}") from exc
+
+
+@router.post("/apps/{app_uuid}/graph/run-node", dependencies=[Depends(require_permission("graph:write"))])
+async def run_graph_node(
+    app_uuid: str,
+    request: RunNodeRequest,
+    ctx: EngineContext = Depends(get_engine_context),
+) -> dict[str, Any]:
+    """单节点运行：不做上游推导，直接把 inputs 当可用变量执行该节点。"""
+    app_row = services.get_app_by_uuid(app_uuid)
+    if app_row is None:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    graph_def = _resolve_run_definition(app_uuid, request.definition)
+    if graph_def.node(request.node_id) is None:
+        raise HTTPException(status_code=404, detail="节点不存在")
+    ctx.tenant_code = app_row.tenant_code
+    try:
+        result = await run_node(graph_def, request.node_id, request.inputs, ctx)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"节点执行失败: {exc}") from exc
+    return {"data": result}
+
+
+@router.post("/apps/{app_uuid}/graph/run", dependencies=[Depends(require_permission("graph:write"))])
+async def run_graph_stream(
+    app_uuid: str,
+    request: RunGraphRequest,
+    ctx: EngineContext = Depends(get_engine_context),
+) -> StreamingResponse:
+    """整图运行：基于传入的图定义（缺省取草稿）流式跑一遍，事件 node_start/token/node_end/final/error。"""
+    app_row = services.get_app_by_uuid(app_uuid)
+    if app_row is None:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    graph_def = _resolve_run_definition(app_uuid, request.definition)
+    ctx.tenant_code = app_row.tenant_code
+
+    async def _events() -> AsyncIterator[str]:
+        try:
+            async for item in stream_graph(graph_def, request.inputs, ctx):
+                yield f"data: {json.dumps(item, ensure_ascii=False, default=str)}\n\n"
+        except Exception as exc:  # noqa: BLE001 - 流式接口要把错误作为事件回传，不能直接抛
+            payload = {"type": "error", "message": str(exc)}
+            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        _events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

@@ -9,11 +9,13 @@ import {
   SCHEMA_VERSION,
   nextNodeId,
   nodeCell,
+  normalizeHandle,
   portItems,
   readGraph,
   toCells,
   toDefinition,
 } from '@/graph/mapper'
+import { defaultConfig } from '@/graph/nodeMeta'
 
 function fakeGraph(nodes, edges = []) {
   return {
@@ -136,6 +138,44 @@ describe('toCells', () => {
 
   it('tolerates an empty or missing definition', () => {
     expect(toCells()).toEqual({ nodes: [], edges: [] })
+  })
+})
+
+describe('normalizeHandle', () => {
+  it('treats Dify default handles as the default port', () => {
+    expect(normalizeHandle('source')).toBe('')
+    expect(normalizeHandle('target')).toBe('')
+    expect(normalizeHandle('yes')).toBe('yes')
+    expect(normalizeHandle(undefined)).toBe('')
+  })
+
+  it('maps imported default handles onto the default output port', () => {
+    const { edges } = toCells({
+      nodes: [],
+      edges: [{ id: 'e1', source: 'a', target: 'b', source_handle: 'source' }],
+    })
+    expect(edges[0].source).toEqual({ cell: 'a', port: DEFAULT_PORT })
+  })
+})
+
+describe('classifierPorts', () => {
+  it('exposes one output port per declared class', () => {
+    const items = portItems({
+      type: 'question-classifier',
+      config: { classes: [{ id: 'billing' }, { id: 'refund' }] },
+    })
+    const outs = items.filter((item) => item.group === 'out')
+    expect(outs.map((item) => item.id)).toEqual(['billing', 'refund'])
+  })
+
+  it('has no output port until a class is declared', () => {
+    const items = portItems({ type: 'question-classifier', config: { classes: [] } })
+    expect(items.filter((item) => item.group === 'out')).toEqual([])
+  })
+
+  it('ships with one class so a new node is connectable', () => {
+    const items = portItems({ type: 'question-classifier', config: defaultConfig('question-classifier') })
+    expect(items.filter((item) => item.group === 'out').map((item) => item.id)).toEqual(['class_1'])
   })
 })
 

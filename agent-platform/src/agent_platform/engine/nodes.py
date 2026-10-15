@@ -5,6 +5,8 @@ import json
 import re
 from typing import Any
 
+import httpx
+
 from agent_platform.engine.code_sandbox import run_code
 from agent_platform.engine.context import EngineContext
 from agent_platform.engine.expr import evaluate, render
@@ -12,15 +14,20 @@ from agent_platform.engine.state import GraphState
 from agent_platform.graph.schema import (
     AggregateConfig,
     AnswerConfig,
+    ClassifierClass,
     ConditionConfig,
     EndConfig,
     ExtractorParameter,
+    HttpRequestConfig,
     KnowledgeConfig,
+    ListOperatorConfig,
     LLMConfig,
     NodeDef,
     ParameterExtractorConfig,
+    QuestionClassifierConfig,
     TemplateTransformConfig,
     ToolConfig,
+    VariableAssignerConfig,
 )
 
 
@@ -41,13 +48,37 @@ def run_start(node: NodeDef, state: GraphState, ctx: EngineContext) -> GraphStat
     return {**state, "variables": variables, "query": str(graph_inputs.get("query", ""))}
 
 
+def _as_text(value: Any) -> str:
+    """把上下文变量（可能是 chunk 列表）摊平成可拼进提示词的文本。"""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        parts: list[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                parts.append(str(item.get("content") or item.get("text") or json.dumps(item, ensure_ascii=False)))
+            else:
+                parts.append(str(item))
+        return "\n".join(parts)
+    if isinstance(value, dict):
+        return str(value.get("content") or value.get("text") or json.dumps(value, ensure_ascii=False))
+    return str(value)
+
+
 async def run_llm(node: NodeDef, state: GraphState, ctx: EngineContext) -> GraphState:
     config: LLMConfig = node.typed_config()
     variables = _variables(state)
+    user_prompt = render(config.user_prompt, variables)
+    if config.context:
+        context_text = _as_text(evaluate(config.context, variables))
+        if context_text:
+            user_prompt = f"{user_prompt}\n\n参考上下文：\n{context_text}"
     answer = await ctx.llm(
         provider=config.provider,
         system_prompt=render(config.system_prompt, variables),
-        user_prompt=render(config.user_prompt, variables),
+        user_prompt=user_prompt,
         temperature=config.temperature,
         max_tokens=config.max_tokens,
     )
@@ -202,6 +233,130 @@ def run_template_transform(node: NodeDef, state: GraphState, ctx: EngineContext)
     local_vars = {item.name: evaluate(item.expression, variables) for item in config.variables}
     output = render(config.template, local_vars)
     return _store(state, variables, node.id, config.output_var, output)
+
+
+async def run_http_request(node: NodeDef, state: GraphState, ctx: EngineContext) -> GraphState:
+    """HTTP 请求：url/headers/params/body 走模板渲染，输出 {body, status_code, headers}。"""
+    config: HttpRequestConfig = node.typed_config()
+    variables = _variables(state)
+    url = render(config.url, variables).strip()
+    if not url:
+        raise ValueError("HTTP 请求节点缺少 url")
+    headers = {key: render(value, variables) for key, value in config.headers.items()}
+    params = {key: render(value, variables) for key, value in config.params.items()}
+    kwargs: dict[str, Any] = {"headers": headers, "params": params}
+    if config.body_type == "json":
+        text = render(config.body, variables).strip()
+        if text:
+            try:
+                parsed_body = json.loads(text)
+            except ValueError:
+                parsed_body = text
+            if isinstance(parsed_body, (dict, list)):
+                kwargs["json"] = parsed_body
+            else:
+                kwargs["content"] = str(parsed_body)
+    elif config.body_type == "text":
+        text = render(config.body, variables)
+        if text:
+            kwargs["content"] = text
+    async with httpx.AsyncClient(timeout=config.timeout) as client:
+        response = await client.request(config.method, url, **kwargs)
+    try:
+        body: Any = response.json()
+    except ValueError:
+        body = response.text
+    result = {"body": body, "status_code": response.status_code, "headers": dict(response.headers)}
+    return _store(state, variables, node.id, config.output_var, result)
+
+
+def _match_classifier_class(raw: str, classes: list[ClassifierClass]) -> ClassifierClass:
+    """把模型输出归一化到类别：先精确（id/name），再包含，最后兜底第一个。"""
+    text = (raw or "").strip().strip("\"'").strip()
+    lowered = text.lower()
+    for item in classes:
+        if lowered in (item.id.lower(), item.name.lower()):
+            return item
+    for item in classes:
+        if item.id.lower() in lowered or item.name.lower() in lowered:
+            return item
+    return classes[0]
+
+
+async def run_question_classifier(node: NodeDef, state: GraphState, ctx: EngineContext) -> GraphState:
+    """问题分类器：LLM 判定类别，类别 id 写入 state['route'] 驱动分支。"""
+    config: QuestionClassifierConfig = node.typed_config()
+    variables = _variables(state)
+    if not config.classes:
+        raise ValueError("问题分类器未定义类别")
+    options = "\n".join(f"- {item.id}: {item.name}" for item in config.classes)
+    system_prompt = (
+        "你是问题分类器。请判断用户问题属于下列哪一个类别，只输出类别 id，不要输出任何其它内容。\n"
+        f"类别：\n{options}"
+    )
+    if config.instruction:
+        system_prompt = f"{system_prompt}\n\n补充指令：{render(config.instruction, variables)}"
+    raw = await ctx.llm(
+        provider=config.provider,
+        system_prompt=system_prompt,
+        user_prompt=render(config.query, variables),
+        temperature=config.temperature,
+        max_tokens=config.max_tokens,
+    )
+    chosen = _match_classifier_class(raw, config.classes)
+    variables[config.output_var] = chosen.id
+    variables[node.id] = chosen.id
+    return {**state, "variables": variables, "route": chosen.id}
+
+
+def run_variable_assigner(node: NodeDef, state: GraphState, ctx: EngineContext) -> GraphState:
+    """变量赋值：逐个 item 求值后写入同名变量。"""
+    config: VariableAssignerConfig = node.typed_config()
+    variables = _variables(state)
+    assigned = {item.name: evaluate(item.expression, variables) for item in config.items if item.name}
+    variables.update(assigned)
+    variables[node.id] = assigned
+    return {**state, "variables": variables}
+
+
+def _list_sort_key(value: Any) -> tuple[int, float, str]:
+    if isinstance(value, bool):
+        return (1, 0.0, str(value))
+    if isinstance(value, (int, float)):
+        return (0, float(value), "")
+    return (1, 0.0, str(value))
+
+
+def run_list_operator(node: NodeDef, state: GraphState, ctx: EngineContext) -> GraphState:
+    """数组操作：取首/尾/下标/截取/筛选/排序/长度。"""
+    config: ListOperatorConfig = node.typed_config()
+    variables = _variables(state)
+    source = evaluate(config.variable, variables) if config.variable else None
+    items = list(source) if isinstance(source, (list, tuple)) else ([] if source is None else [source])
+    operation = config.operation
+    if operation == "first":
+        result: Any = items[0] if items else None
+    elif operation == "last":
+        result = items[-1] if items else None
+    elif operation == "at":
+        result = items[config.index] if 0 <= config.index < len(items) else None
+    elif operation == "limit":
+        result = items[: max(config.count, 0)]
+    elif operation == "size":
+        result = len(items)
+    elif operation == "filter":
+        expression = config.expression or "true"
+        result = [item for item in items if evaluate(expression, {**variables, "item": item})]
+    elif operation == "sort":
+        expression = config.expression or "item"
+        result = sorted(
+            items,
+            key=lambda item: _list_sort_key(evaluate(expression, {**variables, "item": item})),
+            reverse=config.desc,
+        )
+    else:
+        result = items
+    return _store(state, variables, node.id, config.output_var, result)
 
 
 def run_end(node: NodeDef, state: GraphState, ctx: EngineContext) -> GraphState:

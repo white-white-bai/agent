@@ -1,6 +1,6 @@
 import { toRaw } from 'vue'
 
-import { conditionPorts, nodeMeta } from './nodeMeta'
+import { classifierPorts, conditionPorts, nodeMeta } from './nodeMeta'
 
 export const SCHEMA_VERSION = '1.0'
 export const NODE_WIDTH = 176
@@ -29,7 +29,12 @@ export function nextNodeId(type, existingIds = []) {
 }
 
 export function portItems(node) {
-  const outputs = node.type === 'condition' ? conditionPorts(node.config) : [DEFAULT_PORT]
+  let outputs = [DEFAULT_PORT]
+  if (node.type === 'condition') {
+    outputs = conditionPorts(node.config)
+  } else if (node.type === 'question-classifier') {
+    outputs = classifierPorts(node.config)
+  }
   const items = [{ id: INPUT_PORT, group: 'in', args: { x: 0, y: NODE_HEIGHT / 2 } }]
   outputs.forEach((id, index) => {
     items.push({ id, group: 'out', args: { x: NODE_WIDTH, y: (NODE_HEIGHT * (index + 1)) / (outputs.length + 1) } })
@@ -58,10 +63,16 @@ export function nodeCell(node) {
   }
 }
 
+// Dify 导出会把普通边的 sourceHandle 写成 source/target，这里兜底归一，避免挂到不存在的端口
+export function normalizeHandle(value) {
+  const handle = value || ''
+  return handle === 'source' || handle === 'target' ? '' : handle
+}
+
 export function toCells(definition = {}) {
   const nodes = (definition.nodes || []).map(nodeCell)
   const edges = (definition.edges || []).map((edge, index) => {
-    const handle = edge.source_handle || ''
+    const handle = normalizeHandle(edge.source_handle)
     return {
       id: edge.id || `edge-${index}-${edge.source}-${handle}-${edge.target}`,
       source: { cell: edge.source, port: handle || DEFAULT_PORT },

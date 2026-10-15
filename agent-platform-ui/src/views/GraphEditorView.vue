@@ -3,11 +3,13 @@ import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { getApp, getGraph, importGraph, importGraphFile, listGraphVersions, listProviders, publishGraph, rollbackGraph, saveGraphDraft } from '@/api'
+import { getApp, getGraph, importGraph, importGraphFile, listGraphVersions, listProviders, publishGraph, rollbackGraph, runGraphStream, runNode, saveGraphDraft } from '@/api'
 import GraphCanvas from '@/components/GraphCanvas.vue'
 import NodeInspector from '@/components/NodeInspector.vue'
 import NodePalette from '@/components/NodePalette.vue'
+import RowsEditor from '@/components/fields/RowsEditor.vue'
 import { useAuthStore } from '@/stores/auth'
+import { buildRunInputs, formatRunOutput, mergeRunInputs } from '@/utils/run'
 
 const route = useRoute()
 const auth = useAuthStore()
@@ -29,6 +31,22 @@ const importFile = ref(null)
 const importWarnings = ref([])
 // 可用模型条目（AP_LLM_MODELS），供节点检查器与导入对话框下拉使用
 const modelOptions = ref([])
+
+// 运行（整图 / 单节点）
+const runDialog = ref(false)
+const runTarget = ref(null)
+const runValues = ref({})
+const runExtras = ref([])
+const runOutput = ref('')
+const runFinal = ref(null)
+const runSteps = ref([])
+const runBusy = ref(false)
+const runError = ref('')
+const runColumns = [
+  { key: 'name', label: '变量名', kind: 'text' },
+  { key: 'value', label: '值', kind: 'text' },
+]
+let runController = null
 
 const title = computed(() => (app.value && app.value.app_name) || appUuid)
 
@@ -191,6 +209,87 @@ function loadIntoCanvas(next) {
   }
 }
 
+function openRun() {
+  runTarget.value = null
+  openRunDialog()
+}
+
+function openNodeRun(nodeId) {
+  const node = (definition.value.nodes || []).find((item) => item.id === nodeId)
+  runTarget.value = { id: nodeId, title: (node && node.title) || nodeId }
+  openRunDialog()
+}
+
+function openRunDialog() {
+  runValues.value = buildRunInputs(definition.value.inputs || [])
+  runExtras.value = []
+  runOutput.value = ''
+  runFinal.value = null
+  runSteps.value = []
+  runError.value = ''
+  runDialog.value = true
+}
+
+function runPayload() {
+  return { definition: currentDefinition(), inputs: mergeRunInputs(runValues.value, runExtras.value) }
+}
+
+function onRunEvent(event) {
+  if (!event || !event.type) {
+    return
+  }
+  if (event.type === 'token') {
+    runOutput.value += event.content || ''
+  } else if (event.type === 'node_start') {
+    runSteps.value.push({ node: event.node, title: event.title || event.node, status: 'running' })
+  } else if (event.type === 'node_end') {
+    const step = runSteps.value.find((item) => item.node === event.node)
+    if (step) {
+      step.status = 'done'
+    } else {
+      runSteps.value.push({ node: event.node, title: event.node, status: 'done' })
+    }
+  } else if (event.type === 'final') {
+    runFinal.value = event.state || {}
+    if (!runOutput.value) {
+      runOutput.value = event.answer || ''
+    }
+  } else if (event.type === 'error') {
+    runError.value = event.message || '运行失败'
+  }
+}
+
+async function startRun() {
+  runBusy.value = true
+  runError.value = ''
+  runOutput.value = ''
+  runFinal.value = null
+  runSteps.value = []
+  runController = new AbortController()
+  try {
+    if (runTarget.value) {
+      const result = await runNode(appUuid, { ...runPayload(), node_id: runTarget.value.id })
+      runFinal.value = result
+      runOutput.value = formatRunOutput(result && result.output)
+    } else {
+      await runGraphStream(appUuid, runPayload(), onRunEvent, { signal: runController.signal })
+    }
+  } catch (error) {
+    if (error.name !== 'AbortError') {
+      runError.value = error.message || '运行失败'
+    }
+  } finally {
+    runBusy.value = false
+    runController = null
+  }
+}
+
+function stopRun() {
+  if (runController) {
+    runController.abort()
+  }
+}
+
 function onSelect(node) {
   selected.value = node
 }
@@ -214,6 +313,7 @@ function onRemove(id) {
       <span class="editor__spacer" />
       <el-button size="small" @click="fit">自适应</el-button>
       <el-button size="small" @click="openVersions">版本</el-button>
+      <el-button v-if="auth.can('graph:write')" size="small" type="success" @click="openRun">运行</el-button>
       <el-button v-if="auth.can('graph:write')" size="small" @click="importDialog = true">导入 Dify DSL</el-button>
       <el-button v-if="auth.can('graph:write')" size="small" @click="saveDraft">保存草稿</el-button>
       <el-button v-if="auth.can('graph:write')" size="small" type="primary" @click="publish">发布</el-button>
@@ -229,7 +329,13 @@ function onRemove(id) {
         <GraphCanvas v-if="ready" ref="canvas" :definition="definition" @select="onSelect" @change="dirty = true" />
       </div>
       <div class="editor__inspector">
-        <NodeInspector :node="selected" :model-options="modelOptions" @update="onUpdate" @remove="onRemove" />
+        <NodeInspector
+          :node="selected"
+          :model-options="modelOptions"
+          @update="onUpdate"
+          @remove="onRemove"
+          @run="openNodeRun"
+        />
       </div>
     </div>
 
@@ -276,6 +382,44 @@ function onRemove(id) {
       <template #footer>
         <el-button @click="importDialog = false">取消</el-button>
         <el-button type="primary" :loading="busy" @click="runImport">导入并覆盖草稿</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="runDialog" :title="runTarget ? `运行节点：${runTarget.title}` : '运行图（当前草稿）'" width="720px">
+      <el-form label-position="top" size="small">
+        <el-form-item v-for="item in (definition.inputs || [])" :key="item.name" :label="item.required ? `${item.name} *` : item.name">
+          <el-input v-model="runValues[item.name]" :placeholder="item.description || ''" />
+        </el-form-item>
+        <el-form-item label="额外变量（覆盖同名输入）">
+          <RowsEditor v-model="runExtras" :columns="runColumns" />
+        </el-form-item>
+      </el-form>
+
+      <el-alert v-if="runError" type="error" :closable="false" show-icon class="editor__warnings">{{ runError }}</el-alert>
+
+      <div v-if="runSteps.length" class="editor__steps">
+        <el-tag
+          v-for="step in runSteps"
+          :key="step.node"
+          size="small"
+          :type="step.status === 'done' ? 'success' : 'info'"
+          class="editor__step"
+        >
+          {{ step.title }}
+        </el-tag>
+      </div>
+
+      <pre v-if="runOutput" class="editor__runout">{{ runOutput }}</pre>
+
+      <div v-if="runFinal" class="editor__runfinal">
+        <p>运行结果</p>
+        <pre>{{ formatRunOutput(runFinal) }}</pre>
+      </div>
+
+      <template #footer>
+        <el-button v-if="runBusy" @click="stopRun">停止</el-button>
+        <el-button v-else @click="runDialog = false">关闭</el-button>
+        <el-button type="primary" :loading="runBusy" @click="startRun">开始运行</el-button>
       </template>
     </el-dialog>
   </div>
@@ -337,5 +481,42 @@ function onRemove(id) {
 .editor__warnings p {
   margin: 0;
   font-size: 12px;
+}
+
+.editor__steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.editor__runout {
+  max-height: 240px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 8px;
+  background: var(--el-fill-color-light);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.editor__runfinal {
+  margin-top: 12px;
+}
+
+.editor__runfinal p {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.editor__runfinal pre {
+  max-height: 200px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  background: var(--el-fill-color-light);
+  border-radius: 4px;
 }
 </style>

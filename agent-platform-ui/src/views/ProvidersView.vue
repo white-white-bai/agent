@@ -1,7 +1,7 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 
-import { listProviders } from '@/api'
+import { getRetrievalConfig, listProviders } from '@/api'
 import { useTable } from '@/composables/useTable'
 
 const { data, loading } = useTable(() => listProviders())
@@ -9,6 +9,19 @@ const llm = computed(() => (data.value && data.value.llm) || [])
 const retriever = computed(() => (data.value && data.value.retriever) || [])
 const embedding = computed(() => (data.value && data.value.embedding) || {})
 const observability = computed(() => (data.value && data.value.observability) || {})
+
+// 检索流水线（入库 / 粗召回 / 精召回 / 重排序）配置回显
+const retrieval = ref(null)
+const mb = (bytes) => `${Math.round((Number(bytes) || 0) / (1024 * 1024))} MB`
+
+async function loadRetrieval() {
+  try {
+    retrieval.value = (await getRetrievalConfig()) || null
+  } catch {
+    retrieval.value = null
+  }
+}
+loadRetrieval()
 </script>
 
 <template>
@@ -55,6 +68,33 @@ const observability = computed(() => (data.value && data.value.observability) ||
       </el-descriptions-item>
       <el-descriptions-item label="Langfuse 地址">{{ observability.detail || '-' }}</el-descriptions-item>
     </el-descriptions>
+
+    <el-card shadow="never" class="card">
+      <template #header>检索流水线（只读，改配置走 .env）</template>
+      <el-descriptions v-if="retrieval" :column="2" border>
+        <el-descriptions-item label="入库分块">{{ retrieval.chunk_chars }} 字 / 重叠 {{ retrieval.chunk_overlap }} 字</el-descriptions-item>
+        <el-descriptions-item label="单文件上限">{{ mb(retrieval.document_max_bytes) }}</el-descriptions-item>
+        <el-descriptions-item label="粗召回候选数">
+          {{ retrieval.coarse_top_k > 0 ? retrieval.coarse_top_k : '同节点 top_k' }}
+        </el-descriptions-item>
+        <el-descriptions-item label="精召回（混合检索）">
+          <el-tag :type="retrieval.hybrid_enabled ? 'success' : 'info'" size="small">
+            {{ retrieval.hybrid_enabled ? '开启' : '关闭' }}
+          </el-tag>
+          <span v-if="retrieval.hybrid_enabled"> 关键词 top {{ retrieval.lexical_top_k }} / RRF k={{ retrieval.rrf_k }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="重排序">
+          <el-tag :type="retrieval.rerank_enabled ? 'success' : 'info'" size="small">
+            {{ retrieval.rerank_enabled ? '开启' : '关闭' }}
+          </el-tag>
+          <span v-if="retrieval.rerank_enabled"> {{ retrieval.rerank_model || 'rerank' }} @ {{ retrieval.rerank_base_url || '-' }}</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="重排取数">
+          {{ retrieval.rerank_top_k > 0 ? retrieval.rerank_top_k : '同节点 top_k' }}
+        </el-descriptions-item>
+      </el-descriptions>
+      <el-empty v-else description="未读取到检索配置" :image-size="60" />
+    </el-card>
   </div>
 </template>
 

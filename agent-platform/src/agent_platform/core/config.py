@@ -45,9 +45,26 @@ class Settings(BaseSettings):
     guard_max_rounds: int = 0
     guard_default_reply: str = ""
 
-    # 文件导入（图 DSL / 知识库文档）：单文件字节上限与知识库分块字符数
+    # 文件导入：图 DSL 单文件字节上限
     upload_max_bytes: int = 5 * 1024 * 1024
+    # 知识库文档：单文件字节上限（默认 15MB）、分块字符数与重叠字符数
+    document_max_bytes: int = 15 * 1024 * 1024
     document_chunk_chars: int = 800
+    document_chunk_overlap: int = 0
+
+    # 检索流水线
+    # 粗召回（向量）候选数；0 表示用知识节点自己的 top_k
+    retrieval_coarse_top_k: int = 0
+    # 精召回：混合检索（向量 + 关键词，RRF 融合）；默认关闭，关闭时与只用向量逐字节一致
+    retrieval_hybrid_enabled: bool = False
+    retrieval_lexical_top_k: int = 10
+    retrieval_rrf_k: int = 60
+    # 重排序：默认关闭；开启后对候选调 {base_url}/rerank 取最终 top_k
+    rerank_enabled: bool = False
+    rerank_base_url: str = ""
+    rerank_api_key: str = ""
+    rerank_model: str = ""
+    rerank_top_k: int = 0
 
     # 内置向量库
     embedding_dim: int = 256

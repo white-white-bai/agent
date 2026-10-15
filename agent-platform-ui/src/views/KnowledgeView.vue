@@ -22,6 +22,9 @@ const uploading = ref(false)
 const uploadFile = ref(null)
 const uploadForm = reactive({ tenant_code: '', dataset_id: '' })
 
+// 与后端 DOCUMENT_SUFFIXES 保持一致
+const UPLOAD_ACCEPT = '.txt,.md,.markdown,.mdx,.csv,.html,.htm,.pdf,.docx,.xlsx,.xls'
+
 function openCreate() {
   Object.assign(form, { tenant_code: filters.tenant_code, dataset_id: filters.dataset_id, title: '', content: '', metadata: '{}' })
   dialogVisible.value = true
@@ -130,8 +133,14 @@ async function remove(row) {
 
     <el-dialog v-model="uploadVisible" title="上传知识库文件" width="520px">
       <el-form label-position="top">
-        <el-form-item label="文件（.txt / .md / .json / .csv，按段落分块入库）">
-          <el-upload :auto-upload="false" :limit="1" accept=".txt,.md,.json,.csv" :on-change="onUploadChange" :on-remove="() => (uploadFile = null)">
+        <el-form-item :label="`文件（${UPLOAD_ACCEPT}，单文件不超过 15MB，按段落分块入库）`">
+          <el-upload
+            :auto-upload="false"
+            :limit="1"
+            :accept="UPLOAD_ACCEPT"
+            :on-change="onUploadChange"
+            :on-remove="() => (uploadFile = null)"
+          >
             <el-button>选择文件</el-button>
           </el-upload>
         </el-form-item>

@@ -11,7 +11,7 @@ const props = defineProps({
   // 可用模型条目：[{ value, label }]，来自 /admin/providers 的 llm 清单
   modelOptions: { type: Array, default: () => [] },
 })
-const emit = defineEmits(['update', 'remove'])
+const emit = defineEmits(['update', 'remove', 'run'])
 
 const draft = ref(null)
 
@@ -61,6 +61,7 @@ function setTitle(value) {
       <div class="inspector__head">
         <el-tag size="small" effect="dark" :color="meta.color">{{ meta.label }}</el-tag>
         <span class="inspector__id">{{ draft.id }}</span>
+        <el-button link type="primary" size="small" @click="emit('run', draft.id)">运行此节点</el-button>
         <el-button link type="danger" size="small" @click="emit('remove', draft.id)">删除节点</el-button>
       </div>
       <p class="inspector__summary">{{ meta.summary }}</p>
@@ -91,6 +92,11 @@ function setTitle(value) {
             controls-position="right"
             class="inspector__number"
             @update:model-value="(value) => setField(field.key, value === undefined ? null : value)"
+          />
+          <el-switch
+            v-else-if="field.kind === 'boolean'"
+            :model-value="Boolean(fieldValue(field.key))"
+            @update:model-value="(value) => setField(field.key, Boolean(value))"
           />
           <el-select
             v-else-if="field.kind === 'select'"

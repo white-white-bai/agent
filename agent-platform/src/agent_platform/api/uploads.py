@@ -1,7 +1,12 @@
-"""上传文件的统一读取：大小上限、扩展名白名单、文本解码（UTF-8 优先，兼容 GBK）。"""
+"""上传文件的统一读取：大小上限、扩展名白名单、按格式抽取文本（PDF/DOCX/XLSX/XLS/HTML 等）。"""
 from __future__ import annotations
 
+import io
+import itertools
+import re
+from html.parser import HTMLParser
 from pathlib import PurePath
+from typing import ClassVar
 
 from fastapi import HTTPException, UploadFile
 
@@ -9,18 +14,59 @@ from agent_platform.core.config import get_settings
 
 READ_CHUNK = 64 * 1024
 
+# 需要按格式解析（非纯文本）的扩展名
+BINARY_SUFFIXES = {".pdf", ".docx", ".xlsx", ".xls"}
+
 
 async def read_upload(file: UploadFile, allowed_suffixes: set[str]) -> str:
+    """图 DSL 等纯文本上传：只做大小校验与文本解码。"""
+    suffix = _check_suffix(file, allowed_suffixes)
+    raw = await _read_all(file, get_settings().upload_max_bytes)
+    if suffix in BINARY_SUFFIXES:
+        raise HTTPException(status_code=400, detail=f"{suffix} 为二进制格式，不能作为 DSL 导入")
+    return decode_text(raw)
+
+
+async def read_document(file: UploadFile, allowed_suffixes: set[str]) -> str:
+    """知识库文档上传：大小上限 15MB（可配），按扩展名抽取正文。"""
+    suffix = _check_suffix(file, allowed_suffixes)
+    raw = await _read_all(file, get_settings().document_max_bytes)
+    return extract_text(suffix, raw)
+
+
+def _check_suffix(file: UploadFile, allowed_suffixes: set[str]) -> str:
     suffix = PurePath(file.filename or "").suffix.lower()
     if suffix not in allowed_suffixes:
         raise HTTPException(status_code=400, detail=f"不支持的文件类型：{suffix or '无扩展名'}")
-    limit = get_settings().upload_max_bytes
+    return suffix
+
+
+async def _read_all(file: UploadFile, limit: int) -> bytes:
     buffer = bytearray()
     while chunk := await file.read(READ_CHUNK):
         buffer.extend(chunk)
         if len(buffer) > limit:
             raise HTTPException(status_code=413, detail=f"文件超过上限 {limit} 字节")
-    return decode_text(bytes(buffer))
+    return bytes(buffer)
+
+
+def extract_text(suffix: str, raw: bytes) -> str:
+    try:
+        if suffix in (".html", ".htm"):
+            return strip_html(decode_text(raw))
+        if suffix == ".pdf":
+            return _extract_pdf(raw)
+        if suffix == ".docx":
+            return _extract_docx(raw)
+        if suffix == ".xlsx":
+            return _extract_xlsx(raw)
+        if suffix == ".xls":
+            return _extract_xls(raw)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"{suffix} 解析失败：{exc}") from exc
+    return decode_text(raw)
 
 
 def decode_text(raw: bytes) -> str:
@@ -36,8 +82,92 @@ def decode_text(raw: bytes) -> str:
         raise HTTPException(status_code=400, detail="文件编码无法识别，请另存为 UTF-8") from exc
 
 
-def chunk_text(text: str, size: int) -> list[str]:
-    """按空行切段，段落超长时再按 size 硬切；空白块丢弃。"""
+class _HtmlTextCollector(HTMLParser):
+    _SKIP: ClassVar[set[str]] = {"script", "style", "head", "noscript", "title"}
+    _BREAK: ClassVar[set[str]] = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "section", "article"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._skip = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag in self._SKIP:
+            self._skip += 1
+        elif tag in self._BREAK:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in self._SKIP and self._skip:
+            self._skip -= 1
+        elif tag in self._BREAK:
+            self.parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if not self._skip and data.strip():
+            self.parts.append(data.strip())
+
+
+def strip_html(text: str) -> str:
+    collector = _HtmlTextCollector()
+    collector.feed(text)
+    joined = " ".join(collector.parts)
+    joined = re.sub(r"[ \t]+", " ", joined)
+    return re.sub(r"\n\s*\n+", "\n\n", joined).strip()
+
+
+def _extract_pdf(raw: bytes) -> str:
+    from pypdf import PdfReader
+
+    reader = PdfReader(io.BytesIO(raw))
+    pages = [(page.extract_text() or "").strip() for page in reader.pages]
+    return "\n\n".join(page for page in pages if page)
+
+
+def _extract_docx(raw: bytes) -> str:
+    from docx import Document as DocxDocument
+
+    document = DocxDocument(io.BytesIO(raw))
+    lines = [paragraph.text.strip() for paragraph in document.paragraphs if paragraph.text.strip()]
+    for table in document.tables:
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells]
+            if any(cells):
+                lines.append(" | ".join(cells))
+    return "\n".join(lines)
+
+
+def _extract_xlsx(raw: bytes) -> str:
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+    lines: list[str] = []
+    for sheet in workbook.worksheets:
+        lines.append(f"# {sheet.title}")
+        for row in sheet.iter_rows(values_only=True):
+            cells = ["" if value is None else str(value) for value in row]
+            if any(cell.strip() for cell in cells):
+                lines.append(" | ".join(cells))
+    workbook.close()
+    return "\n".join(lines)
+
+
+def _extract_xls(raw: bytes) -> str:
+    import xlrd
+
+    book = xlrd.open_workbook(file_contents=raw)
+    lines: list[str] = []
+    for sheet in book.sheets():
+        lines.append(f"# {sheet.name}")
+        for index in range(sheet.nrows):
+            cells = [str(value) for value in sheet.row_values(index)]
+            if any(cell.strip() for cell in cells):
+                lines.append(" | ".join(cells))
+    return "\n".join(lines)
+
+
+def chunk_text(text: str, size: int, overlap: int = 0) -> list[str]:
+    """按空行切段，段落超长时再按 size 硬切；空白块丢弃；overlap>0 时相邻块保留重叠。"""
     size = max(size, 1)
     pieces: list[str] = []
     for paragraph in (part.strip() for part in text.split("\n\n")):
@@ -50,4 +180,9 @@ def chunk_text(text: str, size: int) -> list[str]:
             merged[-1] = f"{merged[-1]}\n\n{piece}"
         else:
             merged.append(piece)
-    return merged
+    if overlap <= 0 or len(merged) < 2:
+        return merged
+    overlapped = [merged[0]]
+    for previous, current in itertools.pairwise(merged):
+        overlapped.append(f"{previous[-overlap:]}\n\n{current}")
+    return overlapped

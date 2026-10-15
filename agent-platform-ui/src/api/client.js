@@ -1,3 +1,5 @@
+import { parseSseChunk } from '@/utils/sse'
+
 export const TOKEN_KEY = 'ap_admin_token'
 
 export class ApiError extends Error {
@@ -83,4 +85,39 @@ export async function request(path, { method = 'GET', body, params } = {}) {
     throw new ApiError(response.status, detailOf(payload, response.status))
   }
   return payload && typeof payload === 'object' && 'data' in payload ? payload.data : payload
+}
+
+// SSE 流式请求：逐条把事件回调出去（图运行用）
+export async function streamRequest(path, body, onEvent, { signal } = {}) {
+  const headers = { 'Content-Type': 'application/json' }
+  const token = getToken()
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
+  }
+  const response = await fetch(path, { method: 'POST', headers, body: JSON.stringify(body || {}), signal })
+  if (response.status === 401 && unauthorizedHandler) {
+    unauthorizedHandler()
+  }
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null)
+    throw new ApiError(response.status, detailOf(payload, response.status))
+  }
+  if (!response.body) {
+    return
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) {
+      break
+    }
+    buffer += decoder.decode(value, { stream: true })
+    const parsed = parseSseChunk(buffer)
+    buffer = parsed.rest
+    parsed.events.forEach((event) => onEvent(event))
+  }
+  const tail = parseSseChunk(`${buffer}\n\n`)
+  tail.events.forEach((event) => onEvent(event))
 }

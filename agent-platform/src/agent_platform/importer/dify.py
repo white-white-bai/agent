@@ -33,6 +33,10 @@ _DIFY_TO_MIDDLE: dict[str, NodeType] = {
     "answer": NodeType.ANSWER,
     "parameter-extractor": NodeType.PARAMETER_EXTRACTOR,
     "template-transform": NodeType.TEMPLATE_TRANSFORM,
+    "http-request": NodeType.HTTP_REQUEST,
+    "question-classifier": NodeType.QUESTION_CLASSIFIER,
+    "variable-assigner": NodeType.VARIABLE_ASSIGNER,
+    "list-operator": NodeType.LIST_OPERATOR,
 }
 
 _ID_PREFIX: dict[NodeType, str] = {
@@ -47,6 +51,10 @@ _ID_PREFIX: dict[NodeType, str] = {
     NodeType.ANSWER: "answer",
     NodeType.PARAMETER_EXTRACTOR: "extract",
     NodeType.TEMPLATE_TRANSFORM: "tpl",
+    NodeType.HTTP_REQUEST: "http",
+    NodeType.QUESTION_CLASSIFIER: "classifier",
+    NodeType.VARIABLE_ASSIGNER: "assigner",
+    NodeType.LIST_OPERATOR: "listop",
 }
 
 _INPUT_TYPES: dict[str, VarType] = {
@@ -66,6 +74,24 @@ _SINGLE_OUTPUT: dict[NodeType, set[str]] = {
     NodeType.ANSWER: {"answer"},
     NodeType.AGGREGATE: {"output"},
     NodeType.TEMPLATE_TRANSFORM: {"output"},
+    NodeType.HTTP_REQUEST: {"body", "status_code", "headers"},
+    NodeType.QUESTION_CLASSIFIER: {"class_name"},
+}
+
+_LIST_OPERATIONS: dict[str, str] = {
+    "first": "first",
+    "first-record": "first",
+    "last": "last",
+    "last-record": "last",
+    "at": "at",
+    "index": "at",
+    "limit": "limit",
+    "take": "limit",
+    "filter": "filter",
+    "sort": "sort",
+    "size": "size",
+    "length": "size",
+    "count": "size",
 }
 
 _OPERATORS: dict[str, str] = {
@@ -108,6 +134,12 @@ class ImportResult:
     definition: dict[str, Any]
     warnings: list[str] = field(default_factory=list)
     stats: dict[str, int] = field(default_factory=dict)
+
+
+def _normalize_handle(value: Any) -> str:
+    """Dify 普通边的 sourceHandle 固定写成 'source'/'target'，中台用空串表示默认出口。"""
+    handle = str(value or "")
+    return "" if handle in ("source", "target") else handle
 
 
 def _literal(value: Any) -> str:
@@ -154,6 +186,7 @@ class _Converter:
         self.data_map: dict[str, dict[str, Any]] = {}
         self._seen: set[str] = set()
         self._input_names: set[str] = set()
+        self._runtime_vars: set[str] = set()
 
     # ------------------------------------------------------------------ 工具
 
@@ -182,7 +215,8 @@ class _Converter:
         if head == "sys" or head == "env":
             if head == "sys" and tail == "query":
                 return "query"
-            self.warn(f"{head}.{tail} 依赖运行时注入，导入后请确认该变量出现在图输入中")
+            self._runtime_vars.add(tail)
+            self.warn(f"{head}.{tail} 依赖运行时注入，已按同名变量处理并在图输入中补占位")
             return tail
         our_id = self.id_map.get(head)
         if our_id is None:
@@ -191,7 +225,7 @@ class _Converter:
         ntype = self.type_map[head]
         if ntype is NodeType.START:
             return tail
-        if ntype in (NodeType.CODE, NodeType.PARAMETER_EXTRACTOR):
+        if ntype in (NodeType.CODE, NodeType.PARAMETER_EXTRACTOR, NodeType.HTTP_REQUEST):
             return f"{our_id}.{tail}"
         if ntype is NodeType.END:
             self.warn(f"end 节点 {head} 无输出变量，引用 {tail} 已保留原名")
@@ -305,6 +339,14 @@ class _Converter:
             return self._extractor_config(our_id, dify_id, data)
         if ntype is NodeType.TEMPLATE_TRANSFORM:
             return self._template_config(our_id, data)
+        if ntype is NodeType.HTTP_REQUEST:
+            return self._http_config(our_id, dify_id, data)
+        if ntype is NodeType.QUESTION_CLASSIFIER:
+            return self._classifier_config(our_id, dify_id, data)
+        if ntype is NodeType.VARIABLE_ASSIGNER:
+            return self._assigner_config(dify_id, data)
+        if ntype is NodeType.LIST_OPERATOR:
+            return self._list_config(our_id, dify_id, data)
         return self._answer_config(our_id, data)
 
     def _start_config(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -345,11 +387,13 @@ class _Converter:
         if model.get("provider"):
             self.warn(f"Dify 模型 provider 不直接映射，LLM 节点统一使用 {self.llm_provider or '默认模型'}（模型与地址取自 AP_LLM_MODELS 对应条目）")
         extra = self._context_ref(data)
+        prompt_items = [item for item in (data.get("prompt_template") or []) if isinstance(item, dict)]
+        uses_context_var = any("{{#context#}}" in str(item.get("text") or "") for item in prompt_items)
+        if uses_context_var and "context" not in extra:
+            self.warn(f"节点 {dify_id} 提示词引用了 {{{{#context#}}}} 但该节点未启用 context，已按同名变量处理")
         system_parts: list[str] = []
         user_parts: list[str] = []
-        for item in data.get("prompt_template") or []:
-            if not isinstance(item, dict):
-                continue
+        for item in prompt_items:
             text = self._template(item.get("text"), extra)
             role = str(item.get("role") or "user")
             if role == "system":
@@ -361,6 +405,8 @@ class _Converter:
         max_tokens = params.get("max_tokens")
         return {
             "provider": self.llm_provider,
+            # 提示词里已用 {{#context#}} 就地展开时，不再重复走 context 字段
+            "context": "" if uses_context_var else extra.get("context", ""),
             "system_prompt": "\n\n".join(system_parts),
             "user_prompt": "\n\n".join(user_parts) or "{{ query }}",
             "temperature": float(params.get("temperature") or 0.7),
@@ -395,10 +441,11 @@ class _Converter:
 
     def _condition_config(self, dify_id: str, data: dict[str, Any]) -> dict[str, Any]:
         handles = [
-            str(edge.get("sourceHandle"))
+            _normalize_handle(edge.get("sourceHandle"))
             for edge in self.raw_edges
             if isinstance(edge, dict) and str(edge.get("source")) == dify_id and edge.get("sourceHandle")
         ]
+        handles = [handle for handle in handles if handle]
         branches: list[dict[str, str]] = []
         for index, case in enumerate(data.get("cases") or []):
             if not isinstance(case, dict):
@@ -553,6 +600,154 @@ class _Converter:
             "output_var": our_id,
         }
 
+    @staticmethod
+    def _kv_lines(text: Any) -> dict[str, str]:
+        """Dify 的 headers/params 是「每行 key:value（或 key=value）」的字符串。"""
+        result: dict[str, str] = {}
+        if not isinstance(text, str):
+            return result
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            key, sep, value = line.partition(":")
+            if not sep:
+                key, sep, value = line.partition("=")
+            if not sep:
+                continue
+            key = key.strip()
+            if key:
+                result[key] = value.strip()
+        return result
+
+    def _apply_authorization(
+        self, dify_id: str, authorization: Any, headers: dict[str, str], params: dict[str, str]
+    ) -> None:
+        if not isinstance(authorization, dict):
+            return
+        auth_type = str(authorization.get("type") or "no-auth")
+        config = authorization.get("config") if isinstance(authorization.get("config"), dict) else {}
+        if auth_type == "bearer":
+            headers["Authorization"] = f"Bearer {self._template(config.get('api_key'))}"
+        elif auth_type == "api-key":
+            target = str(config.get("header") or "Authorization")
+            value = self._template(config.get("api_key"))
+            if str(config.get("type") or "header") == "query":
+                params[target] = value
+            else:
+                headers[target] = value
+        elif auth_type not in ("no-auth", ""):
+            self.warn(f"节点 {dify_id} 的授权方式 {auth_type} 未导入，请手工补 Authorization 头")
+
+    def _http_config(self, our_id: str, dify_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        method = str(data.get("method") or "get").upper()
+        if method not in ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"):
+            self.warn(f"HTTP 方法 {method} 不支持，已改为 GET（节点 {dify_id}）")
+            method = "GET"
+        headers = {key: self._template(value) for key, value in self._kv_lines(data.get("headers")).items()}
+        params = {key: self._template(value) for key, value in self._kv_lines(data.get("params")).items()}
+        self._apply_authorization(dify_id, data.get("authorization"), headers, params)
+        body = data.get("body") if isinstance(data.get("body"), dict) else {}
+        body_kind = str(body.get("type") or "none")
+        body_type = "none"
+        body_text = ""
+        if body_kind == "json":
+            payload: dict[str, Any] = {}
+            for entry in body.get("data") or []:
+                if isinstance(entry, dict) and str(entry.get("key") or ""):
+                    payload[str(entry["key"])] = self._template(entry.get("value"))
+            body_type = "json"
+            body_text = json.dumps(payload, ensure_ascii=False)
+        elif body_kind in ("raw-text", "text"):
+            entries = body.get("data")
+            if isinstance(entries, str):
+                body_text = self._template(entries)
+            elif isinstance(entries, list) and entries and isinstance(entries[0], dict):
+                body_text = self._template(entries[0].get("value"))
+            body_type = "text"
+        elif body_kind not in ("none", ""):
+            self.warn(f"节点 {dify_id} 的请求体类型 {body_kind} 不支持，已留空")
+        return {
+            "method": method,
+            "url": self._template(data.get("url")),
+            "headers": headers,
+            "params": params,
+            "body_type": body_type,
+            "body": body_text,
+            "timeout": int(data.get("timeout") or 30),
+            "output_var": our_id,
+        }
+
+    def _classifier_config(self, our_id: str, dify_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        model = data.get("model") if isinstance(data.get("model"), dict) else {}
+        params = model.get("completion_params") if isinstance(model.get("completion_params"), dict) else {}
+        if model.get("provider"):
+            self.warn(f"Dify 模型 provider 不直接映射，分类器统一使用 {self.llm_provider or '默认模型'}（取自 AP_LLM_MODELS）")
+        expression = self._selector(data.get("query_variable_selector"))
+        classes: list[dict[str, str]] = []
+        for item in data.get("classes") or []:
+            if isinstance(item, dict) and str(item.get("id") or ""):
+                classes.append({"id": str(item["id"]), "name": str(item.get("name") or item["id"])})
+        if not classes:
+            self.warn(f"问题分类器 {dify_id} 未声明类别，导入后需手工补齐")
+        max_tokens = params.get("max_tokens")
+        return {
+            "provider": self.llm_provider,
+            "query": f"{{{{ {expression} }}}}" if expression else "{{ query }}",
+            "classes": classes,
+            "instruction": self._template(data.get("instruction")),
+            "temperature": float(params.get("temperature") or 0.0),
+            "max_tokens": int(max_tokens) if max_tokens else None,
+            "output_var": our_id,
+        }
+
+    def _assigner_config(self, dify_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        items: list[dict[str, str]] = []
+        for entry in data.get("items") or []:
+            if not isinstance(entry, dict):
+                continue
+            target = entry.get("variable_selector")
+            name = str(target[-1]) if isinstance(target, (list, tuple)) and target else ""
+            if not name:
+                continue
+            operation = str(entry.get("operation") or "over-write")
+            if operation not in ("over-write", "overwrite", ""):
+                self.warn(f"变量赋值操作 {operation} 不支持，已按覆盖写处理（节点 {dify_id}）")
+            source = entry.get("value_selector")
+            if isinstance(source, (list, tuple)) and source:
+                expression = self._selector(source)
+            else:
+                raw_value = entry.get("value")
+                expression = self._expression(raw_value) if isinstance(raw_value, str) else _literal(raw_value)
+            items.append({"name": name, "expression": expression or "none"})
+        return {"items": items}
+
+    def _list_config(self, our_id: str, dify_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        raw_operation = str(data.get("operation") or "first").strip()
+        operation = _LIST_OPERATIONS.get(raw_operation)
+        if operation is None:
+            self.warn(f"数组操作 {raw_operation or '未知'} 不支持，已退化为 first（节点 {dify_id}）")
+            operation = "first"
+        variable = data.get("variable")
+        if isinstance(variable, (list, tuple)):
+            expression = self._selector(variable)
+        elif isinstance(variable, str):
+            expression = self._expression(variable)
+        else:
+            expression = ""
+        element = str(data.get("condition") or data.get("order_by") or "")
+        if operation in ("filter", "sort") and not element:
+            self.warn(f"数组 {operation} 的条件/排序字段未识别，请手工确认（节点 {dify_id}）")
+        return {
+            "variable": expression or "none",
+            "operation": operation,
+            "index": int(data.get("index") or 0),
+            "count": int(data.get("limit") or data.get("count") or 3),
+            "expression": element,
+            "desc": str(data.get("order") or "").lower() in ("desc", "descending"),
+            "output_var": our_id,
+        }
+
     def _answer_config(self, our_id: str, data: dict[str, Any]) -> dict[str, Any]:
         return {"template": self._template(data.get("answer")), "output_var": our_id}
 
@@ -598,7 +793,7 @@ class _Converter:
             source = str(edge.get("source"))
             if source not in self.id_map:
                 continue
-            handle = str(edge.get("sourceHandle") or "")
+            handle = _normalize_handle(edge.get("sourceHandle"))
             target = str(edge.get("target"))
             if target in self.id_map:
                 emit(self.id_map[source], self.id_map[target], handle)
@@ -631,6 +826,12 @@ class _Converter:
             )
         if not any(node["type"] == NodeType.START.value for node in nodes):
             self.warn("未找到 start 节点，导入后需手工补齐")
+
+        # 运行时注入的变量（sys.user_id / sys.files 等）补进图输入，避免运行期未定义
+        for name in sorted(self._runtime_vars):
+            if name and name not in self._input_names:
+                self._input_names.add(name)
+                self.inputs.append(VariableDef(name=name, required=False, description="由运行时注入"))
 
         try:
             definition = GraphDef(
