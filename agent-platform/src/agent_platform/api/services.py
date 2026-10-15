@@ -9,13 +9,16 @@ from sqlalchemy import func, select
 
 from agent_platform.core.db import session_scope
 from agent_platform.domain.models import (
+    Agent,
     App,
     Conversation,
     Graph,
     GraphVersion,
     McpServer,
     Message,
+    PromptTemplate,
     SensitiveWord,
+    Tool,
 )
 from agent_platform.engine.context import LLMInvoker
 from agent_platform.graph.schema import GraphDef
@@ -559,6 +562,168 @@ def create_mcp_server(
 def delete_mcp_server(server_uuid: str) -> bool:
     with session_scope() as session:
         row = session.scalar(select(McpServer).where(McpServer.uuid == server_uuid, McpServer.is_deleted == 0))
+        if row is None:
+            return False
+        row.is_deleted = 1
+        return True
+
+
+# --------------------------------------------------------------------------- 工具声明 / 智能体 / 提示词模板
+
+_TOOL_FIELDS = (
+    "label", "category", "server", "kind", "http_method", "http_path",
+    "params", "retry_attempts", "retry_backoff_seconds", "fallback",
+)
+_AGENT_FIELDS = (
+    "label", "role", "mode", "provider", "system_prompt", "prompt_template", "cot",
+    "tools", "retriever", "pipeline", "max_steps", "reflection_rounds", "temperature", "max_tokens",
+)
+_PROMPT_FIELDS = ("label", "system_prompt", "examples", "cot_hint")
+
+
+def _apply_fields(row: Any, fields: dict[str, Any], allowed: tuple[str, ...]) -> None:
+    for key in allowed:
+        if fields.get(key) is not None:
+            setattr(row, key, fields[key])
+
+
+def list_tools(tenant_code: str = "") -> list[Tool]:
+    with session_scope() as session:
+        stmt = select(Tool).where(Tool.is_deleted == 0)
+        if tenant_code:
+            stmt = stmt.where(Tool.tenant_code == tenant_code)
+        return list(session.scalars(stmt.order_by(Tool.id.desc())).all())
+
+
+def get_tool(tool_uuid: str) -> Tool | None:
+    with session_scope() as session:
+        return session.scalar(select(Tool).where(Tool.uuid == tool_uuid, Tool.is_deleted == 0))
+
+
+def get_tool_by_name(name: str) -> Tool | None:
+    with session_scope() as session:
+        return session.scalar(select(Tool).where(Tool.name == name, Tool.is_deleted == 0))
+
+
+def create_tool(*, tenant_code: str, name: str, **fields: Any) -> Tool:
+    with session_scope() as session:
+        row = Tool(uuid=_new_uuid(), tenant_code=tenant_code, name=name)
+        _apply_fields(row, fields, _TOOL_FIELDS)
+        session.add(row)
+        session.flush()
+        return row
+
+
+def update_tool(tool_uuid: str, **fields: Any) -> Tool | None:
+    with session_scope() as session:
+        row = session.scalar(select(Tool).where(Tool.uuid == tool_uuid, Tool.is_deleted == 0))
+        if row is None:
+            return None
+        _apply_fields(row, fields, _TOOL_FIELDS)
+        return row
+
+
+def delete_tool(tool_uuid: str) -> bool:
+    with session_scope() as session:
+        row = session.scalar(select(Tool).where(Tool.uuid == tool_uuid, Tool.is_deleted == 0))
+        if row is None:
+            return False
+        row.is_deleted = 1
+        return True
+
+
+def list_agents(tenant_code: str = "") -> list[Agent]:
+    with session_scope() as session:
+        stmt = select(Agent).where(Agent.is_deleted == 0)
+        if tenant_code:
+            stmt = stmt.where(Agent.tenant_code == tenant_code)
+        return list(session.scalars(stmt.order_by(Agent.id.desc())).all())
+
+
+def get_agent(agent_uuid: str) -> Agent | None:
+    with session_scope() as session:
+        return session.scalar(select(Agent).where(Agent.uuid == agent_uuid, Agent.is_deleted == 0))
+
+
+def get_agent_by_code(code: str) -> Agent | None:
+    with session_scope() as session:
+        return session.scalar(select(Agent).where(Agent.code == code, Agent.is_deleted == 0))
+
+
+def create_agent(*, tenant_code: str, code: str, **fields: Any) -> Agent:
+    with session_scope() as session:
+        row = Agent(uuid=_new_uuid(), tenant_code=tenant_code, code=code)
+        _apply_fields(row, fields, _AGENT_FIELDS)
+        session.add(row)
+        session.flush()
+        return row
+
+
+def update_agent(agent_uuid: str, **fields: Any) -> Agent | None:
+    with session_scope() as session:
+        row = session.scalar(select(Agent).where(Agent.uuid == agent_uuid, Agent.is_deleted == 0))
+        if row is None:
+            return None
+        _apply_fields(row, fields, _AGENT_FIELDS)
+        return row
+
+
+def delete_agent(agent_uuid: str) -> bool:
+    with session_scope() as session:
+        row = session.scalar(select(Agent).where(Agent.uuid == agent_uuid, Agent.is_deleted == 0))
+        if row is None:
+            return False
+        row.is_deleted = 1
+        return True
+
+
+def list_prompts(tenant_code: str = "") -> list[PromptTemplate]:
+    with session_scope() as session:
+        stmt = select(PromptTemplate).where(PromptTemplate.is_deleted == 0)
+        if tenant_code:
+            stmt = stmt.where(PromptTemplate.tenant_code == tenant_code)
+        return list(session.scalars(stmt.order_by(PromptTemplate.id.desc())).all())
+
+
+def get_prompt(prompt_uuid: str) -> PromptTemplate | None:
+    with session_scope() as session:
+        return session.scalar(
+            select(PromptTemplate).where(PromptTemplate.uuid == prompt_uuid, PromptTemplate.is_deleted == 0)
+        )
+
+
+def get_prompt_by_code(code: str) -> PromptTemplate | None:
+    with session_scope() as session:
+        return session.scalar(
+            select(PromptTemplate).where(PromptTemplate.code == code, PromptTemplate.is_deleted == 0)
+        )
+
+
+def create_prompt(*, tenant_code: str, code: str, **fields: Any) -> PromptTemplate:
+    with session_scope() as session:
+        row = PromptTemplate(uuid=_new_uuid(), tenant_code=tenant_code, code=code)
+        _apply_fields(row, fields, _PROMPT_FIELDS)
+        session.add(row)
+        session.flush()
+        return row
+
+
+def update_prompt(prompt_uuid: str, **fields: Any) -> PromptTemplate | None:
+    with session_scope() as session:
+        row = session.scalar(
+            select(PromptTemplate).where(PromptTemplate.uuid == prompt_uuid, PromptTemplate.is_deleted == 0)
+        )
+        if row is None:
+            return None
+        _apply_fields(row, fields, _PROMPT_FIELDS)
+        return row
+
+
+def delete_prompt(prompt_uuid: str) -> bool:
+    with session_scope() as session:
+        row = session.scalar(
+            select(PromptTemplate).where(PromptTemplate.uuid == prompt_uuid, PromptTemplate.is_deleted == 0)
+        )
         if row is None:
             return False
         row.is_deleted = 1

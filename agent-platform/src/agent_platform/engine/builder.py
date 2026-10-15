@@ -27,6 +27,7 @@ RUNNERS: dict[NodeType, Callable] = {
     NodeType.QUESTION_CLASSIFIER: nodes.run_question_classifier,
     NodeType.VARIABLE_ASSIGNER: nodes.run_variable_assigner,
     NodeType.LIST_OPERATOR: nodes.run_list_operator,
+    NodeType.AGENT: nodes.run_agent_node,
 }
 
 _ASYNC_TYPES = (
@@ -36,6 +37,7 @@ _ASYNC_TYPES = (
     NodeType.PARAMETER_EXTRACTOR,
     NodeType.HTTP_REQUEST,
     NodeType.QUESTION_CLASSIFIER,
+    NodeType.AGENT,
 )
 
 
@@ -110,6 +112,11 @@ def build_graph(graph_def: GraphDef, ctx: EngineContext, checkpointer: Any = Non
             sg.add_conditional_edges(node.id, route_fn, path_map)
         elif node.type == NodeType.QUESTION_CLASSIFIER:
             route_fn, path_map = _classifier_paths(graph_def, node)
+            sg.add_conditional_edges(node.id, route_fn, path_map)
+        elif node.type == NodeType.AGENT and any(edge.source_handle for edge in graph_def.outgoing(node.id)):
+            # supervisor 模式的 agent 通过带句柄的出边做动态路由（句柄 = 成员 agent code）
+            handles = [edge.source_handle for edge in graph_def.outgoing(node.id) if edge.source_handle]
+            route_fn, path_map = _route_paths(graph_def, node, handles[0])
             sg.add_conditional_edges(node.id, route_fn, path_map)
         elif node.type == NodeType.END:
             sg.add_edge(node.id, END)

@@ -60,6 +60,8 @@ agent-platform/
   `node_start` / `token` / `node_end` / `final` / `error`）。两者都以传入的 `definition` 为准，
   缺省取当前草稿，**不写会话/消息**，也不影响对外 `/v1` 契约。
 - 配置：`/sensitive-words`、`/mcp-servers`、`/documents`（内置向量库，上传见下）、`/retrieval/config`（检索流水线只读回显）。
+- 智能体 / 工具 / 提示词：`GET|POST|PUT|DELETE /agents`、`/tools`（含 `POST /tools/{uuid}/test` 试调）、`/prompts`；
+  图模板 `GET /graph/templates`、`GET /graph/templates/{key}`（见下）。
 - 账号：`POST /login`（免鉴权）、`GET /me`、`/users`、`/roles`（见下）。
 - 看板：`GET /metrics/overview`（见下）。
 
@@ -112,6 +114,49 @@ python -m agent_platform.importer app.yml --llm-provider deepseek --retriever li
 - **variable-assigner**：Dify `items[].variable_selector` 的末段作为目标变量名，`value_selector`/`value` 作为取值表达式（非覆盖写操作会提示并降级为覆盖）。
 - **list-operator**：`variable` + `operation`（first / last / at / limit / filter / sort / size）映射；不识别的操作提示并退化为 `first`。
 - **LLM context**：Dify 节点勾选 `context` 时，提示词里的 `{{#context#}}` 会被就地展开成上下文变量；若提示词未引用 `{{#context#}}`，则落到节点的 `context` 字段（运行时拼进提示词）。
+
+## 多智能体编排（Agent 节点 + 7 种工作模式）
+
+引擎新增 `agent` 节点，引用 `ap_agent` 里的智能体定义（管理端「智能体」页维护）：
+
+```json
+{"id": "intent2", "type": "agent", "config": {"agent": "gov.intent", "query": "{{ query }}", "output_var": "intent"}}
+```
+
+`variables[output_var]` 存最终答复字符串；`variables[node_id]` 存结构化结果（`answer` / `reasoning` / `steps` / `sources` / `mode`），
+`supervisor` 模式的 `route` 会写进 `state.route`，配合带句柄的出边做动态路由。
+
+**7 种工作模式**（智能体定义里选，或节点上 `mode` 覆盖）：
+
+| 模式 | 行为 |
+| --- | --- |
+| `react` | Thought → Action（工具）→ Observation 循环；无工具时退化为带 CoT 的一次推理 |
+| `plan_execute` | 先出 JSON 计划，再逐步执行（可调工具），最后汇总 |
+| `reflection` | 生成 → 自我审查 → 修订，迭代 `reflection_rounds` 次 |
+| `supervisor` | 路由模型每轮挑一个成员执行，直到 finish；终选写 `state.route` |
+| `pipeline` | 按 `pipeline` 顺序依次执行，上游结果作为下游输入 |
+| `agent_as_tool` | 把子智能体暴露为 `agent:<code>` 工具，主智能体通过 Action 委派（递归深度上限 3） |
+| `deep_search` | 查询改写 → 多轮检索去重（`ctx.retriever`）→ 基于资料作答并标注引用 |
+
+- **CoT**：智能体 `cot=true` 时注入拆解脚手架，回复里的 `<reasoning>` 段抽到 `reasoning`，正文剥标签入 `answer`。
+- **少样本**：智能体可引用 `ap_prompt_template`（管理端「提示词模板」页维护）的 `examples`，渲染进 system 提示词。
+- **内置预设**：启动时幂等播种 4 类角色智能体（`gov.intent` / `gov.retrieval` / `gov.generate` / `gov.compliance`）、
+  2 个少样本模板与 3 个工具示例；已存在同 code / name 的不覆盖。
+- **图模板**：`GET /admin/graph/templates` 返回内置「政务咨询分角色流水线」（意图识别 → 知识检索 → 内容生成 → 合规质检 → 答复），
+  编辑器工具栏「插入流水线模板」一键载入。
+
+## 工具声明与调用治理
+
+`ap_tool` 声明工具（管理端「工具声明」页维护）：`name` / `label` / `server` / `kind(http|mcp)` / `http_method` + `http_path` /
+`params`（JSON schema：name/type/required/enum）/ `retry_attempts` / `retry_backoff_seconds` / `fallback`。
+
+调用统一经过 `tools/policy.py`：
+
+1. **参数校验**：必填、类型（string/number/boolean/array/object）、`enum` 越界；失败直接抛出（不重试）。
+2. **异常重试**：只重试瞬时错误（超时 / 连接失败 / 5xx / 429），指数退避；默认 `AP_TOOL_RETRY_ATTEMPTS=2`。
+3. **错误兜底**：默认关闭；开启后按 `mode` 返回空值 / 固定值 / 提示话术。链条级策略由 `ToolRef.on_error`（`raise` 默认 / `skip`）控制。
+
+未在 `ap_tool` 声明的引用回退到旧的「服务 + `/tools/{name}`」行为，行为不变。`POST /admin/tools/{uuid}/test` 可用样例参数实调一次。
 
 ## 知识库文档与检索流水线
 

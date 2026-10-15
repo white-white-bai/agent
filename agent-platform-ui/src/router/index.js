@@ -16,6 +16,24 @@ export const MENU_PAGES = [
     meta: { title: '模型与检索', icon: 'Cpu', permission: 'provider:read' },
   },
   {
+    path: '/agents',
+    name: 'agents',
+    component: () => import('@/views/AgentsView.vue'),
+    meta: { title: '智能体', icon: 'MagicStick', permission: 'agent:read' },
+  },
+  {
+    path: '/tools',
+    name: 'tools',
+    component: () => import('@/views/ToolsView.vue'),
+    meta: { title: '工具声明', icon: 'SetUp', permission: 'tool:read' },
+  },
+  {
+    path: '/prompts',
+    name: 'prompts',
+    component: () => import('@/views/PromptsView.vue'),
+    meta: { title: '提示词模板', icon: 'Document', permission: 'prompt:read' },
+  },
+  {
     path: '/mcp',
     name: 'mcp',
     component: () => import('@/views/McpServersView.vue'),

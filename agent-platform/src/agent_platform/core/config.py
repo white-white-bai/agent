@@ -52,6 +52,15 @@ class Settings(BaseSettings):
     document_chunk_chars: int = 800
     document_chunk_overlap: int = 0
 
+    # 工具调用治理：参数校验 / 瞬时错误重试 / 失败兜底（兜底默认关）
+    tool_validate: bool = True
+    tool_retry_attempts: int = 2
+    tool_retry_backoff_seconds: float = 0.5
+    tool_fallback_enabled: bool = False
+
+    # 智能体：ReAct 等模式的默认步数上限
+    agent_max_steps: int = 6
+
     # 检索流水线
     # 粗召回（向量）候选数；0 表示用知识节点自己的 top_k
     retrieval_coarse_top_k: int = 0

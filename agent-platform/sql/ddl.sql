@@ -215,3 +215,76 @@ CREATE TABLE IF NOT EXISTS ap_metric_event (
     PRIMARY KEY (id),
     KEY idx_ap_metric_event_scope (tenant_code, app_uuid, kind, created_at)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '中台指标事件（错误率等，监控看板汇总用）';
+
+CREATE TABLE IF NOT EXISTS ap_tool (
+    id                    BIGINT       NOT NULL AUTO_INCREMENT,
+    uuid                  VARCHAR(64)  NOT NULL,
+    tenant_code           VARCHAR(64)  NOT NULL DEFAULT '',
+    name                  VARCHAR(128) NOT NULL,
+    label                 VARCHAR(128) NOT NULL DEFAULT '',
+    category              VARCHAR(32)  NOT NULL DEFAULT '',
+    server                VARCHAR(64)  NOT NULL DEFAULT '',
+    kind                  VARCHAR(16)  NOT NULL DEFAULT 'http',
+    http_method           VARCHAR(8)   NOT NULL DEFAULT 'POST',
+    http_path             VARCHAR(512) NOT NULL DEFAULT '',
+    params                JSON         NULL,
+    retry_attempts        INT          NULL,
+    retry_backoff_seconds FLOAT        NULL,
+    fallback              JSON         NULL,
+    is_builtin            INT          NOT NULL DEFAULT 0,
+    is_deleted            INT          NOT NULL DEFAULT 0,
+    created_at            DATETIME     NOT NULL,
+    updated_at            DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_ap_tool_uuid (uuid),
+    UNIQUE KEY uk_ap_tool_name (name),
+    KEY idx_ap_tool_tenant (tenant_code)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '生产级工具声明（参数 schema + 端点 + 重试/兜底）';
+
+CREATE TABLE IF NOT EXISTS ap_prompt_template (
+    id            BIGINT       NOT NULL AUTO_INCREMENT,
+    uuid          VARCHAR(64)  NOT NULL,
+    tenant_code   VARCHAR(64)  NOT NULL DEFAULT '',
+    code          VARCHAR(64)  NOT NULL,
+    label         VARCHAR(128) NOT NULL DEFAULT '',
+    system_prompt TEXT         NULL,
+    examples      JSON         NULL,
+    cot_hint      TEXT         NULL,
+    is_builtin    INT          NOT NULL DEFAULT 0,
+    is_deleted    INT          NOT NULL DEFAULT 0,
+    created_at    DATETIME     NOT NULL,
+    updated_at    DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_ap_prompt_template_uuid (uuid),
+    UNIQUE KEY uk_ap_prompt_template_code (code),
+    KEY idx_ap_prompt_template_tenant (tenant_code)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '少样本提示词模板';
+
+CREATE TABLE IF NOT EXISTS ap_agent (
+    id                BIGINT       NOT NULL AUTO_INCREMENT,
+    uuid              VARCHAR(64)  NOT NULL,
+    tenant_code       VARCHAR(64)  NOT NULL DEFAULT '',
+    code              VARCHAR(64)  NOT NULL,
+    label             VARCHAR(128) NOT NULL DEFAULT '',
+    role              VARCHAR(32)  NOT NULL DEFAULT 'custom',
+    mode              VARCHAR(32)  NOT NULL DEFAULT 'react',
+    provider          VARCHAR(64)  NOT NULL DEFAULT '',
+    system_prompt     TEXT         NULL,
+    prompt_template   VARCHAR(64)  NOT NULL DEFAULT '',
+    cot               INT          NOT NULL DEFAULT 0,
+    tools             JSON         NULL,
+    retriever         JSON         NULL,
+    pipeline          JSON         NULL,
+    max_steps         INT          NOT NULL DEFAULT 6,
+    reflection_rounds INT          NOT NULL DEFAULT 2,
+    temperature       FLOAT        NOT NULL DEFAULT 0.3,
+    max_tokens        INT          NULL,
+    is_builtin        INT          NOT NULL DEFAULT 0,
+    is_deleted        INT          NOT NULL DEFAULT 0,
+    created_at        DATETIME     NOT NULL,
+    updated_at        DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_ap_agent_uuid (uuid),
+    UNIQUE KEY uk_ap_agent_code (code),
+    KEY idx_ap_agent_tenant (tenant_code)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '智能体定义（角色 / 工作模式 / 工具 / 提示词）';

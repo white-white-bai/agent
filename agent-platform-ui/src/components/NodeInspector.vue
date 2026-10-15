@@ -10,6 +10,8 @@ const props = defineProps({
   node: { type: Object, default: null },
   // 可用模型条目：[{ value, label }]，来自 /admin/providers 的 llm 清单
   modelOptions: { type: Array, default: () => [] },
+  // 可用智能体：[{ value, label }]，来自 /admin/agents
+  agentOptions: { type: Array, default: () => [] },
 })
 const emit = defineEmits(['update', 'remove', 'run'])
 
@@ -116,6 +118,22 @@ function setTitle(value) {
           >
             <el-option
               v-for="option in modelOptions"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
+          </el-select>
+          <el-select
+            v-else-if="field.kind === 'agent-select'"
+            :model-value="fieldValue(field.key)"
+            class="inspector__select"
+            clearable
+            filterable
+            placeholder="选择智能体"
+            @update:model-value="(value) => setField(field.key, value || '')"
+          >
+            <el-option
+              v-for="option in agentOptions"
               :key="option.value"
               :label="option.label"
               :value="option.value"

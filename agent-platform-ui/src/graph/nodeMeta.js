@@ -265,6 +265,38 @@ export const NODE_TYPES = [
       output_var: 'list_result',
     }),
   },
+  {
+    type: 'agent',
+    label: '智能体',
+    color: '#5a54f9',
+    summary: '按角色与 7 种工作模式编排的多智能体节点',
+    fields: [
+      { key: 'agent', label: '智能体', kind: 'agent-select', help: '来自「智能体」页的定义' },
+      {
+        key: 'mode',
+        label: '覆盖工作模式',
+        kind: 'select',
+        options: ['react', 'plan_execute', 'reflection', 'supervisor', 'pipeline', 'agent_as_tool', 'deep_search'],
+        help: '留空用智能体自身的模式',
+      },
+      { key: 'query', label: '输入', kind: 'textarea', rows: 3 },
+      { key: 'cot', label: '思维链覆盖', kind: 'select', options: ['true', 'false'], help: '留空用智能体定义' },
+      { key: 'max_steps', label: 'max_steps', kind: 'number', min: 1 },
+      { key: 'temperature', label: 'temperature', kind: 'number', step: 0.1, min: 0, max: 2 },
+      { key: 'max_tokens', label: 'max_tokens', kind: 'number', min: 1, nullable: true },
+      { key: 'output_var', label: '输出变量', kind: 'text' },
+    ],
+    defaults: () => ({
+      agent: '',
+      mode: '',
+      query: '{{ query }}',
+      cot: '',
+      max_steps: 6,
+      temperature: 0.3,
+      max_tokens: null,
+      output_var: 'agent_result',
+    }),
+  },
 ]
 
 const BY_TYPE = new Map(NODE_TYPES.map((meta) => [meta.type, meta]))

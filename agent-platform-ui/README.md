@@ -11,7 +11,10 @@ agent 中台的独立管理端。Vue 3 + Vite + Element Plus + Pinia + vue-route
 | `/login` | `LoginView` | 登录，支持 `?redirect=` 回跳 |
 | `/apps` | `AppsView` | agent 应用注册（列表 / 新增 / 编辑 / 删除） |
 | `/apps/:appUuid/graph` | `GraphEditorView` | 图编辑器（AntV X6）、草稿保存、发布、版本回滚、Dify DSL 导入、运行（整图流式 SSE + 单节点运行） |
-| `/providers` | `ProvidersView` | 大模型 / 检索 / 向量 / 观测 provider 配置 |
+| `/providers` | `ProvidersView` | 大模型 / 检索 / 向量 / 观测 provider 配置（含检索流水线只读回显） |
+| `/agents` | `AgentsView` | 智能体定义（角色 / 7 种工作模式 / 工具 / 提示词 / CoT） |
+| `/tools` | `ToolsView` | 生产级工具声明（参数 schema / 重试 / 兜底）与试调 |
+| `/prompts` | `PromptsView` | 少样本提示词模板（system 骨架 + 示例 + CoT 提示） |
 | `/mcp` | `McpServersView` | 工具（MCP server）配置 |
 | `/knowledge` | `KnowledgeView` | 知识库文档 |
 | `/guards` | `GuardsView` | 护栏总开关、敏感词、配额 / 限流 / 轮次、兜底回复 |

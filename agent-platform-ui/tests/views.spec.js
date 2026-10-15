@@ -34,6 +34,22 @@ vi.mock('@/api', () => ({
   createDocument: vi.fn(async () => ({})),
   deleteDocument: vi.fn(async () => ({})),
   listProviders: vi.fn(async () => ({ llm: [], retriever: [], embedding: {}, observability: {} })),
+  getRetrievalConfig: vi.fn(async () => null),
+  listAgents: vi.fn(async () => []),
+  createAgent: vi.fn(async () => ({})),
+  updateAgent: vi.fn(async () => ({})),
+  deleteAgent: vi.fn(async () => ({})),
+  listTools: vi.fn(async () => []),
+  createTool: vi.fn(async () => ({})),
+  updateTool: vi.fn(async () => ({})),
+  deleteTool: vi.fn(async () => ({})),
+  testTool: vi.fn(async () => ({ result: {} })),
+  listPrompts: vi.fn(async () => []),
+  createPrompt: vi.fn(async () => ({})),
+  updatePrompt: vi.fn(async () => ({})),
+  deletePrompt: vi.fn(async () => ({})),
+  listGraphTemplates: vi.fn(async () => []),
+  getGraphTemplate: vi.fn(async () => ({ definition: {} })),
   metricsOverview: vi.fn(async () => ({})),
 }))
 
@@ -49,6 +65,9 @@ import KnowledgeView from '@/views/KnowledgeView.vue'
 import GuardsView from '@/views/GuardsView.vue'
 import AccountsView from '@/views/AccountsView.vue'
 import MetricsView from '@/views/MetricsView.vue'
+import AgentsView from '@/views/AgentsView.vue'
+import ToolsView from '@/views/ToolsView.vue'
+import PromptsView from '@/views/PromptsView.vue'
 
 const flush = () => flushPromises()
 
@@ -266,5 +285,50 @@ describe('MetricsView', () => {
     expect(wrapper.text()).toContain('80.0%')
     expect(wrapper.text()).toContain('2026-10-01 ~ 2026-10-07')
     expect(wrapper.findAllComponents({ name: 'BarChart' })).toHaveLength(3)
+  })
+})
+
+describe('AgentsView', () => {
+  it('lists agent definitions with mode and role', async () => {
+    api.listAgents.mockResolvedValueOnce([
+      { uuid: 'a1', code: 'gov.intent', label: '意图识别', role: 'intent', mode: 'react', cot: true, pipeline: [] },
+    ])
+    const { wrapper } = await mountView(AgentsView)
+    expect(api.listAgents).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('gov.intent')
+    expect(wrapper.text()).toContain('react')
+    expect(wrapper.text()).toContain('意图识别')
+  })
+})
+
+describe('ToolsView', () => {
+  it('lists declared tools with parameter count', async () => {
+    api.listTools.mockResolvedValueOnce([
+      {
+        uuid: 't1',
+        name: 'gov.business.query',
+        label: '政务业务查询',
+        kind: 'http',
+        http_path: '/tools/gov.business.query',
+        params: [{ name: 'keyword', type: 'string', required: true }],
+        fallback: { enabled: false },
+      },
+    ])
+    const { wrapper } = await mountView(ToolsView)
+    expect(api.listTools).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('gov.business.query')
+    expect(wrapper.text()).toContain('1 个')
+  })
+})
+
+describe('PromptsView', () => {
+  it('lists few-shot templates with example counts', async () => {
+    api.listPrompts.mockResolvedValueOnce([
+      { uuid: 'p1', code: 'fewshot.gov_intent', label: '政务意图识别', examples: [{ input: 'i', output: 'o' }] },
+    ])
+    const { wrapper } = await mountView(PromptsView)
+    expect(api.listPrompts).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('fewshot.gov_intent')
+    expect(wrapper.text()).toContain('政务意图识别')
   })
 })

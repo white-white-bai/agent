@@ -50,6 +50,29 @@ export const createDocument = (body) => request('/admin/documents', { method: 'P
 export const deleteDocument = (uuid) => request(`/admin/documents/${uuid}`, { method: 'DELETE' })
 export const uploadDocument = (formData) => request('/admin/documents/upload', { method: 'POST', body: formData })
 
+// 智能体
+export const listAgents = (params) => request('/admin/agents', { params })
+export const createAgent = (body) => request('/admin/agents', { method: 'POST', body })
+export const updateAgent = (uuid, body) => request(`/admin/agents/${uuid}`, { method: 'PUT', body })
+export const deleteAgent = (uuid) => request(`/admin/agents/${uuid}`, { method: 'DELETE' })
+
+// 工具声明
+export const listTools = (params) => request('/admin/tools', { params })
+export const createTool = (body) => request('/admin/tools', { method: 'POST', body })
+export const updateTool = (uuid, body) => request(`/admin/tools/${uuid}`, { method: 'PUT', body })
+export const deleteTool = (uuid) => request(`/admin/tools/${uuid}`, { method: 'DELETE' })
+export const testTool = (uuid, body) => request(`/admin/tools/${uuid}/test`, { method: 'POST', body })
+
+// 提示词模板
+export const listPrompts = (params) => request('/admin/prompts', { params })
+export const createPrompt = (body) => request('/admin/prompts', { method: 'POST', body })
+export const updatePrompt = (uuid, body) => request(`/admin/prompts/${uuid}`, { method: 'PUT', body })
+export const deletePrompt = (uuid) => request(`/admin/prompts/${uuid}`, { method: 'DELETE' })
+
+// 图模板
+export const listGraphTemplates = () => request('/admin/graph/templates')
+export const getGraphTemplate = (key) => request(`/admin/graph/templates/${key}`)
+
 // 模型 / 检索 provider
 export const listProviders = () => request('/admin/providers')
 export const getRetrievalConfig = () => request('/admin/retrieval/config')

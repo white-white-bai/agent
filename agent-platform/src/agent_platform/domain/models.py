@@ -212,3 +212,79 @@ class MetricEvent(Base):
     kind: Mapped[str] = mapped_column(String(32), index=True, default="error")
     detail: Mapped[str] = mapped_column(String(512), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class Tool(Base):
+    """生产级工具声明：参数 schema + 端点 + 重试/兜底策略。"""
+
+    __tablename__ = "ap_tool"
+    __table_args__ = (UniqueConstraint("name", name="uk_ap_tool_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    tenant_code: Mapped[str] = mapped_column(String(64), index=True, default="")
+    name: Mapped[str] = mapped_column(String(128), index=True)
+    label: Mapped[str] = mapped_column(String(128), default="")
+    category: Mapped[str] = mapped_column(String(32), default="")
+    server: Mapped[str] = mapped_column(String(64), default="")
+    kind: Mapped[str] = mapped_column(String(16), default="http")
+    http_method: Mapped[str] = mapped_column(String(8), default="POST")
+    http_path: Mapped[str] = mapped_column(String(512), default="")
+    params: Mapped[list] = mapped_column(JSON, default=list)
+    retry_attempts: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    retry_backoff_seconds: Mapped[float | None] = mapped_column(nullable=True)
+    fallback: Mapped[dict] = mapped_column(JSON, default=dict)
+    is_builtin: Mapped[int] = mapped_column(Integer, default=0)
+    is_deleted: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class PromptTemplate(Base):
+    """少样本提示词模板：system 骨架 + 示例对 + 思维链提示。"""
+
+    __tablename__ = "ap_prompt_template"
+    __table_args__ = (UniqueConstraint("code", name="uk_ap_prompt_template_code"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    tenant_code: Mapped[str] = mapped_column(String(64), index=True, default="")
+    code: Mapped[str] = mapped_column(String(64), index=True)
+    label: Mapped[str] = mapped_column(String(128), default="")
+    system_prompt: Mapped[str] = mapped_column(Text, default="")
+    examples: Mapped[list] = mapped_column(JSON, default=list)
+    cot_hint: Mapped[str] = mapped_column(Text, default="")
+    is_builtin: Mapped[int] = mapped_column(Integer, default=0)
+    is_deleted: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class Agent(Base):
+    """智能体定义：角色 + 工作模式 + 模型/工具/检索 + 提示词与思维链。"""
+
+    __tablename__ = "ap_agent"
+    __table_args__ = (UniqueConstraint("code", name="uk_ap_agent_code"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    tenant_code: Mapped[str] = mapped_column(String(64), index=True, default="")
+    code: Mapped[str] = mapped_column(String(64), index=True)
+    label: Mapped[str] = mapped_column(String(128), default="")
+    role: Mapped[str] = mapped_column(String(32), default="custom")
+    mode: Mapped[str] = mapped_column(String(32), default="react")
+    provider: Mapped[str] = mapped_column(String(64), default="")
+    system_prompt: Mapped[str] = mapped_column(Text, default="")
+    prompt_template: Mapped[str] = mapped_column(String(64), default="")
+    cot: Mapped[int] = mapped_column(Integer, default=0)
+    tools: Mapped[list] = mapped_column(JSON, default=list)
+    retriever: Mapped[dict] = mapped_column(JSON, default=dict)
+    pipeline: Mapped[list] = mapped_column(JSON, default=list)
+    max_steps: Mapped[int] = mapped_column(Integer, default=6)
+    reflection_rounds: Mapped[int] = mapped_column(Integer, default=2)
+    temperature: Mapped[float] = mapped_column(default=0.3)
+    max_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_builtin: Mapped[int] = mapped_column(Integer, default=0)
+    is_deleted: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)

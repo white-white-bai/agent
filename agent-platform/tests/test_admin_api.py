@@ -3,7 +3,17 @@ from __future__ import annotations
 
 import json
 
+import httpx
+
 from agent_platform.core.config import get_settings
+from agent_platform.tools import mcp_bridge as bridge_mod
+
+
+def _patch_tool_http(monkeypatch, handler) -> None:
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        bridge_mod.httpx, "AsyncClient", lambda **kwargs: real(transport=httpx.MockTransport(handler), **kwargs)
+    )
 
 
 def _create_app(api_client, **overrides):
@@ -467,6 +477,112 @@ def test_get_retrieval_config_endpoint(api_client, monkeypatch):
         assert data["document_max_bytes"] == 15 * 1024 * 1024
     finally:
         get_settings.cache_clear()
+
+
+# --------------------------------------------------------------------------- 工具 / 智能体 / 提示词
+
+def test_builtin_agents_prompts_tools_are_seeded(api_client):
+    agents = {row["code"] for row in api_client.get("/admin/agents").json()["data"]}
+    assert {"gov.intent", "gov.retrieval", "gov.generate", "gov.compliance"} <= agents
+    prompts = {row["code"] for row in api_client.get("/admin/prompts").json()["data"]}
+    assert {"fewshot.gov_intent", "fewshot.gov_answer"} <= prompts
+    tools = {row["name"] for row in api_client.get("/admin/tools").json()["data"]}
+    assert {"gov.business.query", "gov.guide.search", "gov.form.validate"} <= tools
+
+
+def test_tool_crud_and_test_endpoint(api_client, monkeypatch):
+    created = api_client.post(
+        "/admin/tools",
+        json={
+            "name": "gov.test.echo",
+            "label": "示例工具",
+            "server": "demo",
+            "kind": "http",
+            "http_path": "/tools/echo",
+            "params": [{"name": "keyword", "type": "string", "required": True}],
+        },
+    )
+    assert created.status_code == 200
+    row = created.json()["data"]
+    assert row["name"] == "gov.test.echo"
+    assert row["params"][0]["required"] is True
+
+    assert api_client.post("/admin/tools", json={"name": "gov.test.echo"}).status_code == 409
+    assert api_client.post("/admin/tools", json={"name": "  "}).status_code == 400
+
+    missing = api_client.post(f"/admin/tools/{row['uuid']}/test", json={"args": {}})
+    assert missing.status_code == 400
+    assert "参数校验失败" in missing.json()["detail"]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True})
+
+    _patch_tool_http(monkeypatch, handler)
+    monkeypatch.setattr(get_settings(), "tool_servers", {"demo": {"url": "https://demo.local", "kind": "http"}})
+    ok = api_client.post(f"/admin/tools/{row['uuid']}/test", json={"args": {"keyword": "x"}})
+    assert ok.status_code == 200
+    assert ok.json()["data"]["result"] == {"ok": True}
+
+    updated = api_client.put(f"/admin/tools/{row['uuid']}", json={"name": "x", "label": "改名"})
+    assert updated.json()["data"]["label"] == "改名"
+
+    assert api_client.delete(f"/admin/tools/{row['uuid']}").json()["data"]["is_deleted"] == 1
+    assert api_client.put(f"/admin/tools/{row['uuid']}", json={"name": "x"}).status_code == 404
+
+
+def test_agent_crud_and_mode_validation(api_client):
+    created = api_client.post(
+        "/admin/agents",
+        json={"code": "local.custom", "label": "自定义", "mode": "react", "system_prompt": "hi", "cot": True},
+    )
+    assert created.status_code == 200
+    row = created.json()["data"]
+    assert row["cot"] is True and row["mode"] == "react"
+
+    bad = api_client.post("/admin/agents", json={"code": "local.bad", "mode": "ghost"})
+    assert bad.status_code == 400
+    assert "不支持的工作模式" in bad.json()["detail"]
+
+    assert api_client.post("/admin/agents", json={"code": "local.custom"}).status_code == 409
+
+    updated = api_client.put(f"/admin/agents/{row['uuid']}", json={"code": "x", "mode": "deep_search", "label": "改名"})
+    assert updated.json()["data"]["mode"] == "deep_search"
+    assert api_client.put(f"/admin/agents/{row['uuid']}", json={"code": "x", "mode": "ghost"}).status_code == 400
+
+    assert api_client.delete(f"/admin/agents/{row['uuid']}").json()["data"]["is_deleted"] == 1
+
+
+def test_prompt_crud(api_client):
+    created = api_client.post(
+        "/admin/prompts",
+        json={
+            "code": "fewshot.custom",
+            "label": "自定义模板",
+            "system_prompt": "sys",
+            "examples": [{"input": "i", "output": "o"}],
+            "cot_hint": "hint",
+        },
+    )
+    assert created.status_code == 200
+    row = created.json()["data"]
+    assert row["examples"][0]["input"] == "i"
+
+    assert api_client.post("/admin/prompts", json={"code": "fewshot.custom"}).status_code == 409
+
+    updated = api_client.put(f"/admin/prompts/{row['uuid']}", json={"code": "x", "label": "改"})
+    assert updated.json()["data"]["label"] == "改"
+
+    assert api_client.delete(f"/admin/prompts/{row['uuid']}").json()["data"]["is_deleted"] == 1
+    assert api_client.delete(f"/admin/prompts/{row['uuid']}").status_code == 404
+
+
+def test_graph_templates_endpoint(api_client):
+    listing = api_client.get("/admin/graph/templates").json()["data"]
+    assert any(item["key"] == "pipeline.gov_consult" for item in listing)
+    template = api_client.get("/admin/graph/templates/pipeline.gov_consult").json()["data"]
+    types = [node["type"] for node in template["definition"]["nodes"]]
+    assert types.count("agent") == 4
+    assert api_client.get("/admin/graph/templates/ghost").status_code == 404
 
 
 # --------------------------------------------------------------------------- 图运行（编排调试）

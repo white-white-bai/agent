@@ -12,6 +12,7 @@ from agent_platform.engine.context import EngineContext
 from agent_platform.engine.expr import evaluate, render
 from agent_platform.engine.state import GraphState
 from agent_platform.graph.schema import (
+    AgentConfig,
     AggregateConfig,
     AnswerConfig,
     ClassifierClass,
@@ -357,6 +358,23 @@ def run_list_operator(node: NodeDef, state: GraphState, ctx: EngineContext) -> G
     else:
         result = items
     return _store(state, variables, node.id, config.output_var, result)
+
+
+async def run_agent_node(node: NodeDef, state: GraphState, ctx: EngineContext) -> GraphState:
+    """智能体节点：按 7 种工作模式执行。
+
+    `variables[output_var]` 存最终答复字符串；`variables[node_id]` 存结构化结果
+    （answer / reasoning / steps / sources / mode / agent）；supervisor 的 route 写入 state。
+    """
+    config: AgentConfig = node.typed_config()
+    variables = _variables(state)
+    result = await ctx.agents(config, variables, ctx, ctx.tenant_code)
+    variables[config.output_var] = result.get("answer", "")
+    variables[node.id] = result
+    next_state: GraphState = {**state, "variables": variables}
+    if result.get("route"):
+        next_state["route"] = str(result["route"])
+    return next_state
 
 
 def run_end(node: NodeDef, state: GraphState, ctx: EngineContext) -> GraphState:

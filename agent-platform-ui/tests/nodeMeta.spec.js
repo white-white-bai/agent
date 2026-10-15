@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { NODE_TYPES, conditionPorts, createNode, defaultConfig, nodeMeta } from '@/graph/nodeMeta'
 
-const EXPECTED_TYPES = ['start', 'end', 'llm', 'knowledge', 'condition', 'code', 'tool', 'aggregate', 'answer', 'parameter-extractor', 'template-transform', 'http-request', 'question-classifier', 'variable-assigner', 'list-operator']
+const EXPECTED_TYPES = ['start', 'end', 'llm', 'knowledge', 'condition', 'code', 'tool', 'aggregate', 'answer', 'parameter-extractor', 'template-transform', 'http-request', 'question-classifier', 'variable-assigner', 'list-operator', 'agent']
 
 describe('NODE_TYPES catalogue', () => {
   it('mirrors the backend NodeType enum', () => {
@@ -20,7 +20,7 @@ describe('NODE_TYPES catalogue', () => {
   })
 
   it('only references known field kinds', () => {
-    const kinds = new Set(['text', 'textarea', 'number', 'select', 'model-select', 'boolean', 'keyvalue', 'stringlist', 'rows'])
+    const kinds = new Set(['text', 'textarea', 'number', 'select', 'model-select', 'agent-select', 'boolean', 'keyvalue', 'stringlist', 'rows'])
     NODE_TYPES.forEach((meta) => {
       meta.fields.forEach((field) => {
         expect(kinds.has(field.kind)).toBe(true)

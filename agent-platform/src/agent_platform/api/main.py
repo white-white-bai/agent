@@ -19,7 +19,7 @@ from agent_platform.api.deps import (
 )
 from agent_platform.api.schemas import ChatMessagesRequest
 from agent_platform.core import accounts as accounts_core
-from agent_platform.core import metrics
+from agent_platform.core import agents_seed, metrics
 from agent_platform.core.concurrency import ConcurrencyLimiter
 from agent_platform.core.config import get_settings
 from agent_platform.core.db import init_db
@@ -33,6 +33,7 @@ from agent_platform.engine.runtime import stream_graph
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_db()
+    agents_seed.seed()
     if get_settings().admin_auth_enabled:
         accounts_core.seed()
     yield

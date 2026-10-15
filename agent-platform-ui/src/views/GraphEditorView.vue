@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { getApp, getGraph, importGraph, importGraphFile, listGraphVersions, listProviders, publishGraph, rollbackGraph, runGraphStream, runNode, saveGraphDraft } from '@/api'
+import { getApp, getGraph, getGraphTemplate, importGraph, importGraphFile, listAgents, listGraphVersions, listProviders, publishGraph, rollbackGraph, runGraphStream, runNode, saveGraphDraft } from '@/api'
 import GraphCanvas from '@/components/GraphCanvas.vue'
 import NodeInspector from '@/components/NodeInspector.vue'
 import NodePalette from '@/components/NodePalette.vue'
@@ -31,6 +31,8 @@ const importFile = ref(null)
 const importWarnings = ref([])
 // 可用模型条目（AP_LLM_MODELS），供节点检查器与导入对话框下拉使用
 const modelOptions = ref([])
+// 可用智能体（/admin/agents），供 agent 节点的下拉使用
+const agentOptions = ref([])
 
 // 运行（整图 / 单节点）
 const runDialog = ref(false)
@@ -60,6 +62,31 @@ async function loadModelOptions() {
   }
 }
 
+async function loadAgentOptions() {
+  try {
+    const rows = (await listAgents()) || []
+    return rows.map((item) => ({ value: item.code, label: `${item.label || item.code}（${item.mode}）` }))
+  } catch {
+    // 拿不到智能体清单不阻断编辑器
+    return []
+  }
+}
+
+async function insertPipelineTemplate() {
+  try {
+    const template = await getGraphTemplate('pipeline.gov_consult')
+    if (!template || !template.definition) {
+      ElMessage.warning('模板不存在')
+      return
+    }
+    loadIntoCanvas(template.definition)
+    dirty.value = true
+    ElMessage.success('已插入「政务咨询分角色流水线」，保存草稿后即可运行')
+  } catch (error) {
+    ElMessage.error(error.message || '插入模板失败')
+  }
+}
+
 async function load() {
   busy.value = true
   try {
@@ -70,6 +97,7 @@ async function load() {
     dirty.value = false
     ready.value = true
     modelOptions.value = await loadModelOptions()
+    agentOptions.value = await loadAgentOptions()
   } catch (error) {
     ElMessage.error(error.message || '加载失败')
   } finally {
@@ -314,6 +342,7 @@ function onRemove(id) {
       <el-button size="small" @click="fit">自适应</el-button>
       <el-button size="small" @click="openVersions">版本</el-button>
       <el-button v-if="auth.can('graph:write')" size="small" type="success" @click="openRun">运行</el-button>
+      <el-button v-if="auth.can('graph:write')" size="small" @click="insertPipelineTemplate">插入流水线模板</el-button>
       <el-button v-if="auth.can('graph:write')" size="small" @click="importDialog = true">导入 Dify DSL</el-button>
       <el-button v-if="auth.can('graph:write')" size="small" @click="saveDraft">保存草稿</el-button>
       <el-button v-if="auth.can('graph:write')" size="small" type="primary" @click="publish">发布</el-button>
@@ -332,6 +361,7 @@ function onRemove(id) {
         <NodeInspector
           :node="selected"
           :model-options="modelOptions"
+          :agent-options="agentOptions"
           @update="onUpdate"
           @remove="onRemove"
           @run="openNodeRun"

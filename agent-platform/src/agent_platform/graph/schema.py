@@ -42,6 +42,7 @@ class NodeType(str, Enum):
     QUESTION_CLASSIFIER = "question-classifier"
     VARIABLE_ASSIGNER = "variable-assigner"
     LIST_OPERATOR = "list-operator"
+    AGENT = "agent"
 
 
 class Position(BaseModel):
@@ -108,6 +109,8 @@ class ToolRef(BaseModel):
     name: str
     server: str = ""
     args: dict[str, Any] = Field(default_factory=dict)
+    # 单个工具失败时的链路策略：raise 直接中断（默认），skip 跳过继续
+    on_error: Literal["raise", "skip"] = "raise"
 
 
 class ToolConfig(BaseModel):
@@ -161,6 +164,47 @@ class TemplateTransformConfig(BaseModel):
     variables: list[CodeInput] = Field(default_factory=list)
     template: str = ""
     output_var: str = "output"
+
+
+# Agent 支持的 7 种工作模式
+AGENT_MODES = (
+    "react",
+    "plan_execute",
+    "reflection",
+    "supervisor",
+    "pipeline",
+    "agent_as_tool",
+    "deep_search",
+)
+
+
+class AgentConfig(BaseModel):
+    """智能体节点：引用 ap_agent 定义，可逐项覆盖。"""
+
+    agent: str = ""
+    mode: str = ""  # 空 = 用 agent 定义里的模式
+    query: str = "{{ query }}"
+    inputs: list[CodeInput] = Field(default_factory=list)
+    tools: list[ToolRef] = Field(default_factory=list)
+    pipeline: list[str] = Field(default_factory=list)
+    cot: bool | None = None
+    prompt_template: str = ""
+    max_steps: int = 6
+    reflection_rounds: int = 2
+    temperature: float | None = None
+    max_tokens: int | None = None
+    output_var: str = "agent_result"
+
+    @field_validator("cot", mode="before")
+    @classmethod
+    def _coerce_cot(cls, value: Any) -> Any:
+        # 前端下拉可能传 "true"/"false"/""；空串表示「用智能体定义里的设置」
+        if isinstance(value, str):
+            text = value.strip().lower()
+            if not text:
+                return None
+            return text in ("true", "1", "yes", "on")
+        return value
 
 
 class HttpRequestConfig(BaseModel):
@@ -237,6 +281,7 @@ CONFIG_MODELS: dict[NodeType, type[BaseModel]] = {
     NodeType.QUESTION_CLASSIFIER: QuestionClassifierConfig,
     NodeType.VARIABLE_ASSIGNER: VariableAssignerConfig,
     NodeType.LIST_OPERATOR: ListOperatorConfig,
+    NodeType.AGENT: AgentConfig,
 }
 
 

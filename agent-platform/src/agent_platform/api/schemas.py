@@ -147,6 +147,67 @@ class RunGraphRequest(BaseModel):
     inputs: dict[str, Any] = Field(default_factory=dict)
 
 
+class ToolParamSpec(BaseModel):
+    name: str
+    type: str = "string"
+    required: bool = False
+    enum: list[str] = Field(default_factory=list)
+    description: str = ""
+
+
+class ToolUpsertRequest(BaseModel):
+    tenant_code: str = ""
+    name: str = ""
+    label: str = ""
+    category: str = ""
+    server: str = ""
+    kind: str = "http"
+    http_method: str = "POST"
+    http_path: str = ""
+    params: list[ToolParamSpec] = Field(default_factory=list)
+    retry_attempts: int | None = None
+    retry_backoff_seconds: float | None = None
+    fallback: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolTestRequest(BaseModel):
+    args: dict[str, Any] = Field(default_factory=dict)
+    tenant_code: str = ""
+
+
+class PromptExample(BaseModel):
+    input: str = ""
+    output: str = ""
+
+
+class PromptUpsertRequest(BaseModel):
+    tenant_code: str = ""
+    code: str = ""
+    label: str = ""
+    system_prompt: str = ""
+    examples: list[PromptExample] = Field(default_factory=list)
+    cot_hint: str = ""
+
+
+class AgentUpsertRequest(BaseModel):
+    tenant_code: str = ""
+    code: str = ""
+    label: str = ""
+    role: str = "custom"
+    mode: str = "react"
+    provider: str = ""
+    system_prompt: str = ""
+    prompt_template: str = ""
+    cot: bool = False
+    tools: list[dict[str, Any]] = Field(default_factory=list)
+    retriever: dict[str, Any] = Field(default_factory=dict)
+    pipeline: list[str] = Field(default_factory=list)
+    max_steps: int = 6
+    reflection_rounds: int = 2
+    temperature: float = 0.3
+    max_tokens: int | None = None
+
+
 class SensitiveWordCreateRequest(BaseModel):
     tenant_code: str = ""
     word: str

@@ -11,9 +11,10 @@ from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
-from agent_platform.api import services
+from agent_platform.api import graph_templates, services
 from agent_platform.api.deps import get_current_admin, get_engine_context, require_admin, require_permission
 from agent_platform.api.schemas import (
+    AgentUpsertRequest,
     AppCreateRequest,
     AppUpdateRequest,
     DocumentCreateRequest,
@@ -22,9 +23,12 @@ from agent_platform.api.schemas import (
     GraphPublishRequest,
     GraphRollbackRequest,
     McpServerCreateRequest,
+    PromptUpsertRequest,
     RunGraphRequest,
     RunNodeRequest,
     SensitiveWordCreateRequest,
+    ToolTestRequest,
+    ToolUpsertRequest,
 )
 from agent_platform.api.uploads import chunk_text, read_document, read_upload
 from agent_platform.core import metrics
@@ -32,10 +36,11 @@ from agent_platform.core.accounts import AdminPrincipal
 from agent_platform.core.config import get_settings
 from agent_platform.engine.context import EngineContext
 from agent_platform.engine.runtime import run_node, stream_graph
-from agent_platform.graph.schema import GraphDef
+from agent_platform.graph.schema import AGENT_MODES, GraphDef
 from agent_platform.importer import DifyImportError, convert, parse_dsl
 from agent_platform.knowledge.embeddings import Embedder
 from agent_platform.knowledge.vector_store import add_document, delete_document
+from agent_platform.tools.mcp_bridge import call_declared_tool
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
@@ -127,6 +132,20 @@ def delete_app(app_uuid: str) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- 图草稿 / 发布 / 回滚
+
+@router.get("/graph/templates", dependencies=[Depends(require_permission("graph:read"))])
+def list_graph_templates() -> dict[str, Any]:
+    """内置图模板列表（编辑器「插入流水线模板」用）。"""
+    return {"data": graph_templates.list_templates()}
+
+
+@router.get("/graph/templates/{template_key}", dependencies=[Depends(require_permission("graph:read"))])
+def get_graph_template(template_key: str) -> dict[str, Any]:
+    template = graph_templates.get_template(template_key)
+    if template is None:
+        raise HTTPException(status_code=404, detail="模板不存在")
+    return {"data": template}
+
 
 @router.get("/apps/{app_uuid}/graph", dependencies=[Depends(require_permission("graph:read"))])
 def get_graph(app_uuid: str) -> dict[str, Any]:
@@ -493,6 +512,199 @@ def get_guard_config() -> dict[str, Any]:
             "default_reply": settings.guard_default_reply,
         }
     }
+
+
+# --------------------------------------------------------------------------- 工具声明 / 智能体 / 提示词模板
+
+def _tool_dict(row: Any) -> dict[str, Any]:
+    return {
+        "uuid": row.uuid,
+        "tenant_code": row.tenant_code,
+        "name": row.name,
+        "label": row.label,
+        "category": row.category,
+        "server": row.server,
+        "kind": row.kind,
+        "http_method": row.http_method,
+        "http_path": row.http_path,
+        "params": row.params or [],
+        "retry_attempts": row.retry_attempts,
+        "retry_backoff_seconds": row.retry_backoff_seconds,
+        "fallback": row.fallback or {},
+        "is_builtin": row.is_builtin,
+    }
+
+
+def _agent_dict(row: Any) -> dict[str, Any]:
+    return {
+        "uuid": row.uuid,
+        "tenant_code": row.tenant_code,
+        "code": row.code,
+        "label": row.label,
+        "role": row.role,
+        "mode": row.mode,
+        "provider": row.provider,
+        "system_prompt": row.system_prompt,
+        "prompt_template": row.prompt_template,
+        "cot": bool(row.cot),
+        "tools": row.tools or [],
+        "retriever": row.retriever or {},
+        "pipeline": row.pipeline or [],
+        "max_steps": row.max_steps,
+        "reflection_rounds": row.reflection_rounds,
+        "temperature": row.temperature,
+        "max_tokens": row.max_tokens,
+        "is_builtin": row.is_builtin,
+    }
+
+
+def _prompt_dict(row: Any) -> dict[str, Any]:
+    return {
+        "uuid": row.uuid,
+        "tenant_code": row.tenant_code,
+        "code": row.code,
+        "label": row.label,
+        "system_prompt": row.system_prompt,
+        "examples": row.examples or [],
+        "cot_hint": row.cot_hint,
+        "is_builtin": row.is_builtin,
+    }
+
+
+@router.get("/tools", dependencies=[Depends(require_permission("tool:read"))])
+def list_tools_endpoint(
+    tenant_code: str = "", principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
+    return {"data": [_tool_dict(row) for row in services.list_tools(principal.scope_tenant(tenant_code))]}
+
+
+@router.post("/tools", dependencies=[Depends(require_permission("tool:write"))])
+def create_tool_endpoint(
+    request: ToolUpsertRequest, principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
+    name = request.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="工具名不能为空")
+    if services.get_tool_by_name(name) is not None:
+        raise HTTPException(status_code=409, detail="工具名已存在")
+    tenant = principal.scope_tenant(request.tenant_code or get_settings().default_tenant)
+    row = services.create_tool(
+        tenant_code=tenant, name=name, **request.model_dump(exclude={"tenant_code", "name"})
+    )
+    return {"data": _tool_dict(row)}
+
+
+@router.put("/tools/{tool_uuid}", dependencies=[Depends(require_permission("tool:write"))])
+def update_tool_endpoint(tool_uuid: str, request: ToolUpsertRequest) -> dict[str, Any]:
+    row = services.update_tool(
+        tool_uuid, **request.model_dump(exclude={"tenant_code", "name"})
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="工具不存在")
+    return {"data": _tool_dict(row)}
+
+
+@router.delete("/tools/{tool_uuid}", dependencies=[Depends(require_permission("tool:write"))])
+def delete_tool_endpoint(tool_uuid: str) -> dict[str, Any]:
+    if not services.delete_tool(tool_uuid):
+        raise HTTPException(status_code=404, detail="工具不存在")
+    return {"data": {"uuid": tool_uuid, "is_deleted": 1}}
+
+
+@router.post("/tools/{tool_uuid}/test", dependencies=[Depends(require_permission("tool:write"))])
+async def test_tool_endpoint(
+    tool_uuid: str, request: ToolTestRequest, principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
+    """用给定参数实调一次（走完整治理链路），只回显结果不落库。"""
+    row = services.get_tool(tool_uuid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="工具不存在")
+    tenant = principal.scope_tenant(request.tenant_code or row.tenant_code or get_settings().default_tenant)
+    try:
+        result = await call_declared_tool(get_settings(), row.name, request.args, server=row.server, tenant_code=tenant)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"工具调用失败: {exc}") from exc
+    return {"data": {"name": row.name, "result": result}}
+
+
+@router.get("/agents", dependencies=[Depends(require_permission("agent:read"))])
+def list_agents_endpoint(
+    tenant_code: str = "", principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
+    return {"data": [_agent_dict(row) for row in services.list_agents(principal.scope_tenant(tenant_code))]}
+
+
+@router.post("/agents", dependencies=[Depends(require_permission("agent:write"))])
+def create_agent_endpoint(
+    request: AgentUpsertRequest, principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
+    code = request.code.strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="agent code 不能为空")
+    if request.mode not in AGENT_MODES:
+        raise HTTPException(status_code=400, detail=f"不支持的工作模式: {request.mode}")
+    if services.get_agent_by_code(code) is not None:
+        raise HTTPException(status_code=409, detail="agent code 已存在")
+    tenant = principal.scope_tenant(request.tenant_code or get_settings().default_tenant)
+    row = services.create_agent(
+        tenant_code=tenant, code=code, **request.model_dump(exclude={"tenant_code", "code"})
+    )
+    return {"data": _agent_dict(row)}
+
+
+@router.put("/agents/{agent_uuid}", dependencies=[Depends(require_permission("agent:write"))])
+def update_agent_endpoint(agent_uuid: str, request: AgentUpsertRequest) -> dict[str, Any]:
+    if request.mode not in AGENT_MODES:
+        raise HTTPException(status_code=400, detail=f"不支持的工作模式: {request.mode}")
+    row = services.update_agent(agent_uuid, **request.model_dump(exclude={"tenant_code", "code"}))
+    if row is None:
+        raise HTTPException(status_code=404, detail="智能体不存在")
+    return {"data": _agent_dict(row)}
+
+
+@router.delete("/agents/{agent_uuid}", dependencies=[Depends(require_permission("agent:write"))])
+def delete_agent_endpoint(agent_uuid: str) -> dict[str, Any]:
+    if not services.delete_agent(agent_uuid):
+        raise HTTPException(status_code=404, detail="智能体不存在")
+    return {"data": {"uuid": agent_uuid, "is_deleted": 1}}
+
+
+@router.get("/prompts", dependencies=[Depends(require_permission("prompt:read"))])
+def list_prompts_endpoint(
+    tenant_code: str = "", principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
+    return {"data": [_prompt_dict(row) for row in services.list_prompts(principal.scope_tenant(tenant_code))]}
+
+
+@router.post("/prompts", dependencies=[Depends(require_permission("prompt:write"))])
+def create_prompt_endpoint(
+    request: PromptUpsertRequest, principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
+    code = request.code.strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="模板 code 不能为空")
+    if services.get_prompt_by_code(code) is not None:
+        raise HTTPException(status_code=409, detail="模板 code 已存在")
+    tenant = principal.scope_tenant(request.tenant_code or get_settings().default_tenant)
+    row = services.create_prompt(
+        tenant_code=tenant, code=code, **request.model_dump(exclude={"tenant_code", "code"})
+    )
+    return {"data": _prompt_dict(row)}
+
+
+@router.put("/prompts/{prompt_uuid}", dependencies=[Depends(require_permission("prompt:write"))])
+def update_prompt_endpoint(prompt_uuid: str, request: PromptUpsertRequest) -> dict[str, Any]:
+    row = services.update_prompt(prompt_uuid, **request.model_dump(exclude={"tenant_code", "code"}))
+    if row is None:
+        raise HTTPException(status_code=404, detail="提示词模板不存在")
+    return {"data": _prompt_dict(row)}
+
+
+@router.delete("/prompts/{prompt_uuid}", dependencies=[Depends(require_permission("prompt:write"))])
+def delete_prompt_endpoint(prompt_uuid: str) -> dict[str, Any]:
+    if not services.delete_prompt(prompt_uuid):
+        raise HTTPException(status_code=404, detail="提示词模板不存在")
+    return {"data": {"uuid": prompt_uuid, "is_deleted": 1}}
 
 
 # --------------------------------------------------------------------------- 监控看板

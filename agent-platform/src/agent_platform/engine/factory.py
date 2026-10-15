@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from agent_platform.core.config import Settings, get_settings
+from agent_platform.engine.agents.runner import build_agent_invoker
 from agent_platform.engine.context import EngineContext
 from agent_platform.knowledge.retrievers import build_retriever
 from agent_platform.models.factory import build_llm_invoker
@@ -21,6 +22,7 @@ def build_engine_context(
         llm=build_llm_invoker(settings),
         retriever=build_retriever(settings),
         tools=build_tool_invoker(settings),
+        agents=build_agent_invoker(settings),
         tenant_code=tenant_code,
         tracer=tracer,
     )
