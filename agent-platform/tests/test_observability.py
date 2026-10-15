@@ -1,6 +1,7 @@
 """Langfuse 埋点：no-op 降级、Span 生命周期与节点级 trace。"""
 from __future__ import annotations
 
+import logging
 import sys
 import types
 from typing import Any
@@ -11,6 +12,7 @@ from agent_platform.core.config import Settings
 from agent_platform.engine.context import EngineContext
 from agent_platform.engine.runtime import run_graph
 from agent_platform.graph.schema import GraphDef
+from agent_platform.observability import langfuse as observability_mod
 from agent_platform.observability.langfuse import LangfuseTracer, Span, Tracer, build_tracer
 
 
@@ -91,6 +93,36 @@ def test_build_tracer_falls_back_when_client_construction_fails(monkeypatch):
     tracer = build_tracer(Settings(langfuse_host="https://lf.local"))
     assert isinstance(tracer, Tracer)
     assert tracer.enabled is False
+
+
+def test_build_tracer_warns_once_when_sdk_missing(monkeypatch, caplog):
+    monkeypatch.setitem(sys.modules, "langfuse", None)
+    observability_mod.reset_warning()
+    with caplog.at_level(logging.WARNING):
+        build_tracer(Settings(langfuse_host="https://lf.local"))
+        build_tracer(Settings(langfuse_host="https://lf.local"))
+    hits = [record for record in caplog.records if "SDK 不可用" in record.message]
+    assert len(hits) == 1
+    assert "langfuse>=2,<3" in hits[0].message
+
+
+def test_build_tracer_warns_once_when_client_construction_fails(monkeypatch, caplog):
+    def boom(**kwargs: Any) -> Any:
+        raise RuntimeError("bad keys")
+
+    _inject_langfuse(monkeypatch, boom)
+    observability_mod.reset_warning()
+    with caplog.at_level(logging.WARNING):
+        build_tracer(Settings(langfuse_host="https://lf.local"))
+        build_tracer(Settings(langfuse_host="https://lf.local"))
+    assert len([record for record in caplog.records if "初始化失败" in record.message]) == 1
+
+
+def test_build_tracer_without_host_stays_silent(caplog):
+    observability_mod.reset_warning()
+    with caplog.at_level(logging.WARNING):
+        build_tracer(Settings())
+    assert caplog.records == []
 
 
 def test_build_tracer_uses_langfuse_when_configured(monkeypatch):

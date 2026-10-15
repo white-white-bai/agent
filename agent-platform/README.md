@@ -158,6 +158,31 @@ python -m agent_platform.importer app.yml --llm-provider deepseek --retriever li
 
 未在 `ap_tool` 声明的引用回退到旧的「服务 + `/tools/{name}`」行为，行为不变。`POST /admin/tools/{uuid}/test` 可用样例参数实调一次。
 
+## 链路追踪（Langfuse）
+
+对话链路每个节点一个 span（`node_type` / 输入 / 输出 / 耗时 / 错误），由 `observability/langfuse.py` 上报。
+
+```bash
+# 三个变量放在 .env；compose 里把 host 覆盖成容器内地址
+AP_LANGFUSE_HOST=            # 本地留空表示关闭；compose 覆盖为 http://langfuse:3000
+AP_LANGFUSE_PUBLIC_KEY=pk-lf-local-dev
+AP_LANGFUSE_SECRET_KEY=sk-lf-local-dev
+```
+
+**两套凭证别混**：Web UI 登录用**用户账号**（compose 里 `LANGFUSE_INIT_USER_*` 播种，默认 `admin@local.dev` / `admin1234`），
+调 API 用**项目 API Key**（public + secret）。API 访问是 HTTP Basic，用户名 = public key、密码 = secret key：
+
+```bash
+curl http://localhost:3001/api/public/health          # 不需要 key
+curl -u pk-lf-local-dev:sk-lf-local-dev http://localhost:3001/api/public/projects
+curl -u pk-lf-local-dev:sk-lf-local-dev "http://localhost:3001/api/public/traces?limit=5"
+```
+
+UI 里换 / 复制 key 的位置是 **Settings → API Keys**。
+
+**降级是有声音的**：配了 host 但 SDK 缺失或初始化失败时，首次会记一条 warning 并降级为 no-op
+（`langfuse>=2,<3` 是依赖，与 compose 的 `langfuse/langfuse:2` 对应，v3 SDK 的 API 不同）。
+
 ## 知识库文档与检索流水线
 
 **上传入库**（`POST /admin/documents/upload`）支持：

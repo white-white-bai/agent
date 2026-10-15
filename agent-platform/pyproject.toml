@@ -18,6 +18,8 @@ dependencies = [
     "langchain-core>=0.2",
     "langgraph>=0.1",
     "langchain-openai>=0.1",
+    # 链路追踪（与 compose 里的 langfuse/langfuse:2 对应，v3 SDK 的 API 不同）
+    "langfuse>=2,<3",
     # 知识库文件解析（PDF / DOCX / XLSX / XLS）
     "pypdf>=4.0",
     "python-docx>=1.1",

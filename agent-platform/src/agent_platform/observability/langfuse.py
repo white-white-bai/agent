@@ -1,11 +1,33 @@
-"""Langfuse 埋点：节点级 trace（输入/输出/耗时/错误）；未配置或未安装时降级为 no-op。"""
+"""Langfuse 埋点：节点级 trace（输入/输出/耗时/错误）；未配置或未安装时降级为 no-op。
+
+降级是**有声音**的：配置了 host 但 SDK 缺失 / 初始化失败时，首次会记一条 warning，
+避免「配了密钥却什么都没上报」这种情况没人发现。
+"""
 from __future__ import annotations
 
+import logging
 import time
 from contextlib import contextmanager
 from typing import Any
 
 from agent_platform.core.config import Settings
+
+logger = logging.getLogger(__name__)
+
+_warned = False
+
+
+def _warn_once(message: str) -> None:
+    global _warned
+    if not _warned:
+        _warned = True
+        logger.warning(message)
+
+
+def reset_warning() -> None:
+    """测试用：重置「只告警一次」的标记。"""
+    global _warned
+    _warned = False
 
 
 class Span:
@@ -90,7 +112,11 @@ def build_tracer(settings: Settings, *, name: str = "graph-run", user_id: str = 
         return Tracer()
     try:
         from langfuse import Langfuse
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        _warn_once(
+            f"Langfuse 已配置（{settings.langfuse_host}）但 SDK 不可用，链路追踪降级为 no-op："
+            f"{type(exc).__name__}: {exc}（需要安装 langfuse>=2,<3）"
+        )
         return Tracer()
     try:
         client = Langfuse(
@@ -100,5 +126,9 @@ def build_tracer(settings: Settings, *, name: str = "graph-run", user_id: str = 
         )
         trace = client.trace(name=name, user_id=user_id or None, metadata=metadata or {})
         return LangfuseTracer(client, trace)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        _warn_once(
+            f"Langfuse 初始化失败（{settings.langfuse_host}），链路追踪降级为 no-op："
+            f"{type(exc).__name__}: {exc}"
+        )
         return Tracer()
