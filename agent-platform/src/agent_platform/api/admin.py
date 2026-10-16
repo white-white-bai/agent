@@ -23,20 +23,23 @@ from agent_platform.api.schemas import (
     AgentUpsertRequest,
     AppCreateRequest,
     AppUpdateRequest,
-    DocumentCreateRequest,
+    DatasetUpsertRequest,
+    DocumentTextRequest,
     GraphDraftRequest,
     GraphImportRequest,
     GraphPublishRequest,
     GraphRollbackRequest,
     McpServerCreateRequest,
     PromptUpsertRequest,
+    RetrieveRequest,
     RunGraphRequest,
     RunNodeRequest,
+    SegmentUpdateRequest,
     SensitiveWordCreateRequest,
     ToolTestRequest,
     ToolUpsertRequest,
 )
-from agent_platform.api.uploads import chunk_text, read_document, read_upload
+from agent_platform.api.uploads import read_document, read_upload
 from agent_platform.core import metrics
 from agent_platform.core.accounts import AdminPrincipal
 from agent_platform.core.config import get_settings
@@ -45,7 +48,6 @@ from agent_platform.engine.runtime import run_node, stream_graph
 from agent_platform.graph.schema import AGENT_MODES, GraphDef
 from agent_platform.importer import DifyImportError, convert, parse_dsl
 from agent_platform.knowledge.embeddings import Embedder
-from agent_platform.knowledge.vector_store import add_document, delete_document
 from agent_platform.tools.mcp_bridge import call_declared_tool
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
@@ -335,91 +337,306 @@ def delete_mcp_server(server_uuid: str) -> dict[str, Any]:
     return {"data": {"uuid": server_uuid, "is_deleted": 1}}
 
 
-# --------------------------------------------------------------------------- 知识库文档
+# --------------------------------------------------------------------------- 知识库
 
-@router.get("/documents", dependencies=[Depends(require_permission("knowledge:read"))])
-def list_documents(
-    tenant_code: str = "", dataset_id: str = "", principal: AdminPrincipal = Depends(get_current_admin)
-) -> dict[str, Any]:
-    from agent_platform.knowledge.vector_store import list_documents as _list
+def _tenant(principal: AdminPrincipal, requested: str = "") -> str:
+    return principal.scope_tenant(requested) or get_settings().default_tenant
 
-    rows = _list(principal.scope_tenant(tenant_code) or get_settings().default_tenant, dataset_id)
+
+def _iso(value: Any) -> str:
+    return value.isoformat() if value is not None else ""
+
+
+def _dataset_dict(row: Any, document_count: int = 0) -> dict[str, Any]:
     return {
-        "data": [
-            {
-                "uuid": row.uuid,
-                "tenant_code": row.tenant_code,
-                "dataset_id": row.dataset_id,
-                "title": row.title,
-                "content": row.content,
-                "metadata": row.doc_metadata or {},
-            }
-            for row in rows
-        ]
+        "uuid": row.uuid,
+        "tenant_code": row.tenant_code,
+        "name": row.name,
+        "description": row.description,
+        "embedding_model": row.embedding_model,
+        "retrieval": row.retrieval or {},
+        "document_count": document_count,
+        "created_at": _iso(row.created_at),
+        "updated_at": _iso(row.updated_at),
     }
 
 
-@router.post("/documents", dependencies=[Depends(require_permission("knowledge:write"))])
-async def create_document(
-    request: DocumentCreateRequest, principal: AdminPrincipal = Depends(get_current_admin)
-) -> dict[str, Any]:
-    settings = get_settings()
-    embedder = Embedder(settings)
-    embedding = await embedder.encode(request.content)
-    row = add_document(
-        tenant_code=principal.scope_tenant(request.tenant_code or settings.default_tenant),
-        dataset_id=request.dataset_id,
-        title=request.title,
-        content=request.content,
-        embedding=embedding,
-        metadata=request.metadata,
+def _document_dict(row: Any) -> dict[str, Any]:
+    return {
+        "uuid": row.uuid,
+        "tenant_code": row.tenant_code,
+        "dataset_id": row.dataset_id,
+        "name": row.name,
+        "file_type": row.file_type,
+        "file_size": row.file_size,
+        "char_count": row.char_count,
+        "chunk_count": row.chunk_count,
+        "status": row.status,
+        "error": row.error,
+        "metadata": row.doc_metadata or {},
+        "created_by": row.created_by,
+        "created_at": _iso(row.created_at),
+        "updated_at": _iso(row.updated_at),
+    }
+
+
+def _segment_dict(row: Any) -> dict[str, Any]:
+    return {
+        "uuid": row.uuid,
+        "document_uuid": row.document_uuid,
+        "dataset_id": row.dataset_id,
+        "position": row.position,
+        "content": row.content,
+        "enabled": row.enabled,
+        "hit_count": row.hit_count,
+        "created_at": _iso(row.created_at),
+    }
+
+
+def _get_dataset_or_404(dataset_uuid: str, principal: AdminPrincipal) -> Any:
+    from agent_platform.knowledge import datasets as datasets_mod
+
+    dataset = datasets_mod.get_dataset(dataset_uuid, principal.tenant_code)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+    return dataset
+
+
+@router.get("/datasets", dependencies=[Depends(require_permission("knowledge:read"))])
+def list_datasets(tenant_code: str = "", principal: AdminPrincipal = Depends(get_current_admin)) -> dict[str, Any]:
+    from agent_platform.knowledge import datasets as datasets_mod
+
+    tenant = _tenant(principal, tenant_code)
+    rows = datasets_mod.list_datasets(tenant)
+    counts = datasets_mod.document_counts(tenant, [row.uuid for row in rows])
+    return {"data": [_dataset_dict(row, counts.get(row.uuid, 0)) for row in rows]}
+
+
+@router.post("/datasets", dependencies=[Depends(require_permission("knowledge:write"))])
+def create_dataset(request: DatasetUpsertRequest, principal: AdminPrincipal = Depends(get_current_admin)) -> dict[str, Any]:
+    from agent_platform.knowledge import datasets as datasets_mod
+
+    if not request.name.strip():
+        raise HTTPException(status_code=400, detail="知识库名称不能为空")
+    row = datasets_mod.create_dataset(
+        tenant_code=_tenant(principal, request.tenant_code),
+        name=request.name.strip(),
+        description=request.description,
+        retrieval=request.retrieval,
+        embedding_model=request.embedding_model,
     )
-    return {"data": {"uuid": row.uuid, "title": row.title, "dataset_id": row.dataset_id}}
+    return {"data": _dataset_dict(row)}
+
+
+@router.get("/datasets/{dataset_uuid}", dependencies=[Depends(require_permission("knowledge:read"))])
+def get_dataset(dataset_uuid: str, principal: AdminPrincipal = Depends(get_current_admin)) -> dict[str, Any]:
+    from agent_platform.knowledge import datasets as datasets_mod
+
+    dataset = _get_dataset_or_404(dataset_uuid, principal)
+    counts = datasets_mod.document_counts(dataset.tenant_code, [dataset_uuid])
+    return {"data": _dataset_dict(dataset, counts.get(dataset_uuid, 0))}
+
+
+@router.put("/datasets/{dataset_uuid}", dependencies=[Depends(require_permission("knowledge:write"))])
+def update_dataset(
+    dataset_uuid: str, request: DatasetUpsertRequest, principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
+    from agent_platform.knowledge import datasets as datasets_mod
+
+    row = datasets_mod.update_dataset(
+        dataset_uuid,
+        name=request.name or None,
+        description=request.description,
+        retrieval=request.retrieval if request.retrieval else None,
+        embedding_model=request.embedding_model or None,
+        tenant_code=principal.tenant_code,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="知识库不存在")
+    return {"data": _dataset_dict(row)}
+
+
+@router.delete("/datasets/{dataset_uuid}", dependencies=[Depends(require_permission("knowledge:write"))])
+def delete_dataset(dataset_uuid: str, principal: AdminPrincipal = Depends(get_current_admin)) -> dict[str, Any]:
+    from agent_platform.knowledge import datasets as datasets_mod
+
+    if not datasets_mod.delete_dataset(dataset_uuid, principal.tenant_code):
+        raise HTTPException(status_code=404, detail="知识库不存在")
+    return {"data": {"uuid": dataset_uuid, "is_deleted": 1}}
+
+
+@router.get("/datasets/{dataset_uuid}/documents", dependencies=[Depends(require_permission("knowledge:read"))])
+def list_dataset_documents(
+    dataset_uuid: str,
+    page: int = 1,
+    size: int = 20,
+    principal: AdminPrincipal = Depends(get_current_admin),
+) -> dict[str, Any]:
+    from agent_platform.knowledge import documents as documents_mod
+
+    dataset = _get_dataset_or_404(dataset_uuid, principal)
+    rows, total = documents_mod.list_documents(dataset.tenant_code, dataset_uuid, page, size)
+    return {"data": {"items": [_document_dict(row) for row in rows], "total": total, "page": page, "size": size}}
+
+
+@router.post("/datasets/{dataset_uuid}/documents", dependencies=[Depends(require_permission("knowledge:write"))])
+async def create_dataset_document(
+    dataset_uuid: str, request: DocumentTextRequest, principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
+    from agent_platform.knowledge import documents as documents_mod
+    from agent_platform.knowledge.ingest import ingest_document
+
+    if not request.content.strip():
+        raise HTTPException(status_code=400, detail="文档内容为空")
+    dataset = _get_dataset_or_404(dataset_uuid, principal)
+    document = documents_mod.create_document(
+        tenant_code=dataset.tenant_code,
+        dataset_id=dataset_uuid,
+        name=request.name.strip() or "未命名文档",
+        content=request.content,
+        file_type="text",
+        file_size=len(request.content.encode("utf-8")),
+        status="pending",
+        metadata=request.metadata,
+        created_by=principal.username,
+    )
+    await ingest_document(document.uuid)
+    return {"data": _document_dict(documents_mod.get_document(document.uuid))}
+
+
+@router.post("/datasets/{dataset_uuid}/documents/upload", dependencies=[Depends(require_permission("knowledge:write"))])
+async def upload_dataset_document(
+    dataset_uuid: str,
+    file: UploadFile,
+    principal: AdminPrincipal = Depends(get_current_admin),
+) -> dict[str, Any]:
+    from agent_platform.knowledge import documents as documents_mod
+    from agent_platform.knowledge.ingest import dispatch_ingest, ingest_document
+
+    settings = get_settings()
+    dataset = _get_dataset_or_404(dataset_uuid, principal)
+    content = await read_document(file, DOCUMENT_SUFFIXES)
+    if not content.strip():
+        raise HTTPException(status_code=400, detail="文件内容为空")
+    filename = file.filename or ""
+    size = len(content.encode("utf-8"))
+    document = documents_mod.create_document(
+        tenant_code=dataset.tenant_code,
+        dataset_id=dataset_uuid,
+        name=PurePath(filename).stem or filename or "未命名文档",
+        content=content,
+        file_type=PurePath(filename).suffix.lower(),
+        file_size=size,
+        status="pending",
+        metadata={"source": "upload", "filename": filename},
+        created_by=principal.username,
+    )
+    threshold = settings.knowledge_async_threshold_bytes
+    ingest = "sync"
+    if threshold and size < threshold:
+        await ingest_document(document.uuid)
+    else:
+        ingest = dispatch_ingest(document.uuid)
+    return {"data": {**_document_dict(documents_mod.get_document(document.uuid)), "ingest": ingest}}
 
 
 @router.delete("/documents/{document_uuid}", dependencies=[Depends(require_permission("knowledge:write"))])
-def delete_document_endpoint(document_uuid: str) -> dict[str, Any]:
-    if not delete_document(document_uuid):
+def delete_document_endpoint(document_uuid: str, principal: AdminPrincipal = Depends(get_current_admin)) -> dict[str, Any]:
+    from agent_platform.knowledge import documents as documents_mod
+
+    if not documents_mod.delete_document(document_uuid, principal.tenant_code):
         raise HTTPException(status_code=404, detail="文档不存在")
     return {"data": {"uuid": document_uuid, "is_deleted": 1}}
 
 
-@router.post("/documents/upload", dependencies=[Depends(require_permission("knowledge:write"))])
-async def upload_document(
-    file: UploadFile,
-    tenant_code: str = Form(""),
-    dataset_id: str = Form(""),
+@router.post("/documents/{document_uuid}/reindex", dependencies=[Depends(require_permission("knowledge:write"))])
+async def reindex_document(document_uuid: str, principal: AdminPrincipal = Depends(get_current_admin)) -> dict[str, Any]:
+    from agent_platform.knowledge import documents as documents_mod
+    from agent_platform.knowledge.ingest import dispatch_ingest, ingest_document
+
+    settings = get_settings()
+    document = documents_mod.get_document(document_uuid, principal.tenant_code)
+    if document is None:
+        raise HTTPException(status_code=404, detail="文档不存在")
+    documents_mod.update_document(document_uuid, status="pending", error="", tenant_code=principal.tenant_code)
+    documents_mod.replace_segments(document_uuid, [])
+    threshold = settings.knowledge_async_threshold_bytes
+    size = len((document.content or "").encode("utf-8"))
+    if threshold and size < threshold:
+        await ingest_document(document_uuid)
+        ingest = "sync"
+    else:
+        ingest = dispatch_ingest(document_uuid)
+    row = documents_mod.get_document(document_uuid)
+    return {"data": {**_document_dict(row), "ingest": ingest}}
+
+
+@router.get("/documents/{document_uuid}/segments", dependencies=[Depends(require_permission("knowledge:read"))])
+def list_document_segments(
+    document_uuid: str,
+    page: int = 1,
+    size: int = 100,
     principal: AdminPrincipal = Depends(get_current_admin),
 ) -> dict[str, Any]:
-    settings = get_settings()
-    content = await read_document(file, DOCUMENT_SUFFIXES)
-    chunks = chunk_text(content, settings.document_chunk_chars, settings.document_chunk_overlap)
-    if not chunks:
-        raise HTTPException(status_code=400, detail="文件内容为空")
-    tenant = principal.scope_tenant(tenant_code or settings.default_tenant)
-    title = PurePath(file.filename or "").stem
-    embedder = Embedder(settings)
-    rows = []
-    for index, chunk in enumerate(chunks):
-        embedding = await embedder.encode(chunk)
-        rows.append(
-            add_document(
-                tenant_code=tenant,
-                dataset_id=dataset_id,
-                title=title,
-                content=chunk,
-                embedding=embedding,
-                metadata={"source": "upload", "filename": file.filename or "", "chunk": index, "chunks": len(chunks)},
-            )
-        )
-    return {
-        "data": {
-            "title": title,
-            "dataset_id": dataset_id,
-            "chunks": len(rows),
-            "uuids": [row.uuid for row in rows],
-        }
-    }
+    from agent_platform.knowledge import documents as documents_mod
+
+    if documents_mod.get_document(document_uuid, principal.tenant_code) is None:
+        raise HTTPException(status_code=404, detail="文档不存在")
+    rows, total = documents_mod.list_segments(document_uuid, principal.tenant_code, page, size)
+    return {"data": {"items": [_segment_dict(row) for row in rows], "total": total, "page": page, "size": size}}
+
+
+@router.put("/segments/{segment_uuid}", dependencies=[Depends(require_permission("knowledge:write"))])
+async def update_segment(
+    segment_uuid: str, request: SegmentUpdateRequest, principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
+    from agent_platform.knowledge import documents as documents_mod
+
+    embedding = None
+    if request.content is not None:
+        embedding = await Embedder(get_settings()).encode(request.content)
+    row = documents_mod.update_segment(
+        segment_uuid,
+        content=request.content,
+        embedding=embedding,
+        enabled=request.enabled,
+        tenant_code=principal.tenant_code,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="分段不存在")
+    return {"data": _segment_dict(row)}
+
+
+@router.delete("/segments/{segment_uuid}", dependencies=[Depends(require_permission("knowledge:write"))])
+def delete_segment(segment_uuid: str, principal: AdminPrincipal = Depends(get_current_admin)) -> dict[str, Any]:
+    from agent_platform.knowledge import documents as documents_mod
+
+    if not documents_mod.delete_segment(segment_uuid, principal.tenant_code):
+        raise HTTPException(status_code=404, detail="分段不存在")
+    return {"data": {"uuid": segment_uuid, "is_deleted": 1}}
+
+
+@router.post("/datasets/{dataset_uuid}/retrieve", dependencies=[Depends(require_permission("knowledge:read"))])
+async def retrieve_dataset(
+    dataset_uuid: str, request: RetrieveRequest, principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
+    from agent_platform.knowledge.vector_store import build_builtin_searcher
+
+    dataset = _get_dataset_or_404(dataset_uuid, principal)
+    config = dataset.retrieval or {}
+    top_k = request.top_k or int(config.get("top_k") or 5)
+    threshold = request.score_threshold if request.score_threshold is not None else config.get("score_threshold")
+    hits = await build_builtin_searcher(get_settings())(
+        tenant_code=dataset.tenant_code,
+        query=request.query,
+        dataset_ids=[dataset_uuid],
+        top_k=top_k,
+        score_threshold=threshold,
+        coarse_top_k=config.get("coarse_top_k"),
+        hybrid=config.get("hybrid"),
+        rerank=config.get("rerank"),
+    )
+    return {"data": {"query": request.query, "top_k": top_k, "hits": hits}}
 
 
 # --------------------------------------------------------------------------- 模型 / 检索 provider

@@ -197,6 +197,18 @@ describe('NodeInspector', () => {
     expect(wrapper.emitted('remove')).toEqual([['llm_1']])
   })
 
+  it('renders the knowledge node dataset picker and retrieval overrides', () => {
+    const wrapper = mount(NodeInspector, {
+      props: {
+        node: { id: 'knowledge_1', type: 'knowledge', title: '知识检索', config: defaultConfig('knowledge') },
+        datasetOptions: [{ value: 'ds1', label: '政务库' }],
+      },
+    })
+    expect(wrapper.text()).toContain('知识库')
+    expect(wrapper.text()).toContain('粗召回 top_k')
+    expect(wrapper.text()).toContain('混合检索')
+  })
+
   it('renders the help hint for the end node outputs', () => {
     const wrapper = mount(NodeInspector, { props: { node: { id: 'end_1', type: 'end', title: '', config: { outputs: {} } } } })
     expect(wrapper.text()).toContain('值为裸表达式')

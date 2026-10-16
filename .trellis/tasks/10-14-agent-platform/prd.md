@@ -274,6 +274,18 @@
   手动保存 / 发布 / 导入 / 回滚 / 组件卸载时清掉定时器；顶栏显示「保存中…」/「未保存」
 - [x] 测试：`tests/components.spec.js` 增 1 项回归（下发的 config 必须能被 `structuredClone`，原实现抛 `DataCloneError`）；`npm test` 173 项全绿，`npm run lint` 通过
 
+**M-续批（2026-10-16）· 知识库完善（对齐 Dify）**：把「一行=一分段」的简陋实现升级为知识库两层模型，补齐入库/分段/召回测试/图节点选择器。
+
+- [x] 数据模型：新增 `ap_dataset`（知识库）+ `ap_document_segment`（分段），`ap_document` 改为文档元数据（`name/file_type/file_size/char_count/chunk_count/status/error` + 原文 `content`）；
+  `sql/ddl.sql` 同步三张表，`sql/migrate_knowledge_segments.sql`（`RENAME TABLE` + `information_schema` 守卫）把老「文档即分段」数据按 `(租户,dataset,title)` 归组成文档与分段
+- [x] 服务层：拆 `knowledge/datasets.py`（知识库 CRUD + 级联）与 `knowledge/documents.py`（文档/分段 CRUD、分页、按租户隔离删除、重建分段）；`knowledge/vector_store.py` 检索改到分段（join 文档、过滤未删/停用），
+  命中保留 `content/document_name` 以兼容 `metadata.retriever_resources`
+- [x] 入库：`knowledge/ingest.py`（分块→逐块向量化→落分段→回填状态）；小文件同步、大文件异步——`dispatch_ingest` 在 Redis 可用时入 worker 队列，否则进程内 `asyncio` 任务；`worker/jobs.knowledge_ingest` 改为按 `document_uuid` 入库；
+  新增配置 `AP_KNOWLEDGE_ASYNC_THRESHOLD_BYTES`（默认 1MB）
+- [x] 管理端 API：`/admin/datasets`（CRUD）、`/admin/datasets/{uuid}/documents`（列表/文本入库/上传）、`/admin/datasets/{uuid}/retrieve`（召回测试）、`/admin/documents/{uuid}`（删/重传）、`/admin/documents/{uuid}/segments`、`/admin/segments/{uuid}`（改/启停/删）；旧 `/admin/documents` 下线
+- [x] 前端：`KnowledgeView` 重构为「知识库列表 + 文档表」两栏，新增 `components/knowledge/{DatasetPanel,DocumentTable,SegmentDrawer,HitTestDialog}.vue`；上传走 XHR 进度条（`client.uploadRequest`）；`pending` 文档轮询；图节点 `dataset_ids` 改用新 `dataset-select` 下拉并暴露 `coarse_top_k/hybrid/rerank`
+- [x] 测试：后端 `tests/{test_knowledge,test_retrieval,test_worker,test_admin_api}.py` 改配分段语义并新增知识库/文档/分段/召回测试，`pytest` 434 项 + `ruff` 通过；前端 `tests/{api,views,components,nodeMeta}.spec.js` 更新，`npm test` 186 项 + `npm run lint` + `npm run build` 通过
+
 **未纳入本批**：无（决策清单的 M1～M4 各项均已交付）。
 
 **环境备注**：本机 Python 3.11.1；依赖已 `pip install -e ".[dev]"`；测试用临时 SQLite（`conftest.py`），生产用 MySQL（`sql/ddl.sql` 人工执行）。

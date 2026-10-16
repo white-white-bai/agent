@@ -221,12 +221,31 @@ class McpServerCreateRequest(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
 
 
-class DocumentCreateRequest(BaseModel):
+class DatasetUpsertRequest(BaseModel):
     tenant_code: str = ""
-    dataset_id: str = ""
-    title: str = ""
+    name: str = ""
+    description: str = ""
+    embedding_model: str = ""
+    retrieval: dict[str, Any] = Field(default_factory=dict)
+
+
+class DocumentTextRequest(BaseModel):
+    tenant_code: str = ""
+    name: str = ""
     content: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SegmentUpdateRequest(BaseModel):
+    content: str | None = None
+    enabled: int | None = None
+
+
+class RetrieveRequest(BaseModel):
+    tenant_code: str = ""
+    query: str = ""
+    top_k: int | None = None
+    score_threshold: float | None = None
 
 
 # --------------------------------------------------------------------------- 管理端账号

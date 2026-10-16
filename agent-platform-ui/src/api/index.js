@@ -1,4 +1,4 @@
-import { request, streamRequest } from './client'
+import { request, streamRequest, uploadRequest } from './client'
 
 // 账号
 export const login = (username, password) => request('/admin/login', { method: 'POST', body: { username, password } })
@@ -44,11 +44,23 @@ export const listMcpServers = (params) => request('/admin/mcp-servers', { params
 export const createMcpServer = (body) => request('/admin/mcp-servers', { method: 'POST', body })
 export const deleteMcpServer = (uuid) => request(`/admin/mcp-servers/${uuid}`, { method: 'DELETE' })
 
-// 知识库文档
-export const listDocuments = (params) => request('/admin/documents', { params })
-export const createDocument = (body) => request('/admin/documents', { method: 'POST', body })
+// 知识库：知识库（数据集）/ 文档 / 分段 / 召回测试
+export const listDatasets = (params) => request('/admin/datasets', { params })
+export const createDataset = (body) => request('/admin/datasets', { method: 'POST', body })
+export const getDataset = (uuid) => request(`/admin/datasets/${uuid}`)
+export const updateDataset = (uuid, body) => request(`/admin/datasets/${uuid}`, { method: 'PUT', body })
+export const deleteDataset = (uuid) => request(`/admin/datasets/${uuid}`, { method: 'DELETE' })
+export const listDatasetDocuments = (uuid, params) => request(`/admin/datasets/${uuid}/documents`, { params })
+export const createDatasetDocument = (uuid, body) =>
+  request(`/admin/datasets/${uuid}/documents`, { method: 'POST', body })
+export const uploadDatasetDocument = (uuid, formData, onProgress) =>
+  uploadRequest(`/admin/datasets/${uuid}/documents/upload`, formData, { onProgress })
 export const deleteDocument = (uuid) => request(`/admin/documents/${uuid}`, { method: 'DELETE' })
-export const uploadDocument = (formData) => request('/admin/documents/upload', { method: 'POST', body: formData })
+export const reindexDocument = (uuid) => request(`/admin/documents/${uuid}/reindex`, { method: 'POST' })
+export const listSegments = (uuid, params) => request(`/admin/documents/${uuid}/segments`, { params })
+export const updateSegment = (uuid, body) => request(`/admin/segments/${uuid}`, { method: 'PUT', body })
+export const deleteSegment = (uuid) => request(`/admin/segments/${uuid}`, { method: 'DELETE' })
+export const retrieveDataset = (uuid, body) => request(`/admin/datasets/${uuid}/retrieve`, { method: 'POST', body })
 
 // 智能体
 export const listAgents = (params) => request('/admin/agents', { params })

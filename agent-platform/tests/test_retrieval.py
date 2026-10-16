@@ -7,13 +7,13 @@ import pytest
 from agent_platform.core.config import Settings
 from agent_platform.graph.schema import KnowledgeConfig
 from agent_platform.knowledge import retrieval as retrieval_mod
+from agent_platform.knowledge.documents import add_segment, create_document
 from agent_platform.knowledge.embeddings import hash_embed
 from agent_platform.knowledge.retrieval import rerank_documents, rrf_merge
 from agent_platform.knowledge.retrievers import build_retriever
 from agent_platform.knowledge.vector_store import (
-    add_document,
     build_builtin_searcher,
-    fetch_documents,
+    build_passages,
     lexical_hits,
     search_documents,
 )
@@ -21,6 +21,19 @@ from agent_platform.knowledge.vector_store import (
 ZERO = [0.0] * 256
 # 在 patch 之前抓住真实类，否则工厂会递归调用自己
 _REAL_ASYNC_CLIENT = httpx.AsyncClient
+
+
+def _seed(tenant_code: str, dataset_id: str, name: str, content: str, embedding: list[float]) -> None:
+    document = create_document(
+        tenant_code=tenant_code, dataset_id=dataset_id, name=name, content=content, status="ready"
+    )
+    add_segment(
+        tenant_code=tenant_code,
+        dataset_id=dataset_id,
+        document_uuid=document.uuid,
+        content=content,
+        embedding=embedding,
+    )
 
 
 def _fake_client(handler):
@@ -84,12 +97,12 @@ async def test_rerank_documents_without_base_url_is_passthrough():
 
 
 def test_lexical_hits_match_keywords_only():
-    add_document(tenant_code="t", dataset_id="d1", title="指南", content="常州天气查询办事指南", embedding=ZERO)
-    add_document(tenant_code="t", dataset_id="d1", title="其它", content="汽车置换补贴标准", embedding=ZERO)
-    documents = fetch_documents("t", ["d1"])
-    hits = lexical_hits(documents, "常州天气")
+    _seed("t", "d1", "指南", "常州天气查询办事指南", ZERO)
+    _seed("t", "d1", "其它", "汽车置换补贴标准", ZERO)
+    passages = build_passages("t", ["d1"])
+    hits = lexical_hits(passages, "常州天气")
     assert [item["document_name"] for item in hits] == ["指南"]
-    assert lexical_hits(documents, "完全无关的东西") == []
+    assert lexical_hits(passages, "完全无关的东西") == []
 
 
 # --------------------------------------------------------------------------- 流水线
@@ -98,8 +111,8 @@ def test_lexical_hits_match_keywords_only():
 @pytest.mark.asyncio
 async def test_defaults_are_identical_to_pure_vector_search():
     content = "常州天气查询办事指南"
-    add_document(tenant_code="t", dataset_id="d1", title="指南", content=content, embedding=hash_embed(content))
-    add_document(tenant_code="t", dataset_id="d1", title="其它", content="汽车置换", embedding=hash_embed("汽车置换"))
+    _seed("t", "d1", "指南", content, hash_embed(content))
+    _seed("t", "d1", "其它", "汽车置换", hash_embed("汽车置换"))
 
     searcher = build_builtin_searcher(Settings(embedding_dim=256))
     pipeline = await searcher(tenant_code="t", query=content, dataset_ids=["d1"], top_k=5, score_threshold=None)
@@ -111,7 +124,7 @@ async def test_defaults_are_identical_to_pure_vector_search():
 
 @pytest.mark.asyncio
 async def test_hybrid_recall_surfaces_keyword_only_hit():
-    add_document(tenant_code="t", dataset_id="d1", title="关键词", content="苏超购票专题智能体上线", embedding=ZERO)
+    _seed("t", "d1", "关键词", "苏超购票专题智能体上线", ZERO)
     searcher = build_builtin_searcher(
         Settings(embedding_dim=256, retrieval_hybrid_enabled=True, retrieval_coarse_top_k=5, retrieval_lexical_top_k=5)
     )
@@ -127,8 +140,8 @@ async def test_hybrid_recall_surfaces_keyword_only_hit():
 
 @pytest.mark.asyncio
 async def test_rerank_reorders_and_falls_back_on_failure(monkeypatch):
-    add_document(tenant_code="t", dataset_id="d1", title="A", content="甲", embedding=hash_embed("甲"))
-    add_document(tenant_code="t", dataset_id="d1", title="B", content="乙", embedding=hash_embed("乙"))
+    _seed("t", "d1", "A", "甲", hash_embed("甲"))
+    _seed("t", "d1", "B", "乙", hash_embed("乙"))
     searcher = build_builtin_searcher(
         Settings(embedding_dim=256, rerank_enabled=True, rerank_base_url="https://rerank.local", rerank_model="m")
     )
@@ -152,7 +165,7 @@ async def test_rerank_reorders_and_falls_back_on_failure(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_node_level_hybrid_override_beats_global_default():
-    add_document(tenant_code="t", dataset_id="d1", title="关键词", content="苏超购票专题", embedding=ZERO)
+    _seed("t", "d1", "关键词", "苏超购票专题", ZERO)
     retrieve = build_retriever(Settings(embedding_dim=256, retrieval_coarse_top_k=5, retrieval_lexical_top_k=5))
 
     overridden = KnowledgeConfig(retriever="builtin", dataset_ids=["d1"], top_k=5, score_threshold=0.5, hybrid=True)

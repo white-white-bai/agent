@@ -12,24 +12,15 @@ from agent_platform.core.db import session_scope
 from agent_platform.domain.models import Conversation, Message
 from agent_platform.engine.factory import build_engine_context
 from agent_platform.engine.runtime import run_graph
-from agent_platform.knowledge.embeddings import Embedder
-from agent_platform.knowledge.vector_store import add_document
+from agent_platform.knowledge.ingest import ingest_document
 
 
 async def knowledge_ingest(payload: dict[str, Any]) -> dict[str, Any]:
-    settings = get_settings()
-    embedder = Embedder(settings)
-    content = payload.get("content", "")
-    vector = await embedder.encode(content)
-    document = add_document(
-        tenant_code=payload.get("tenant_code", settings.default_tenant),
-        dataset_id=payload.get("dataset_id", ""),
-        title=payload.get("title", ""),
-        content=content,
-        embedding=vector,
-        metadata=payload.get("metadata") or {},
-    )
-    return {"document_uuid": document.uuid}
+    """按 document_uuid 重建分段（入库 / 重传）。"""
+    document_uuid = payload.get("document_uuid", "")
+    if not document_uuid:
+        raise RuntimeError("知识入库缺少 document_uuid")
+    return await ingest_document(document_uuid)
 
 
 async def graph_batch_run(payload: dict[str, Any]) -> dict[str, Any]:

@@ -20,12 +20,28 @@ describe('NODE_TYPES catalogue', () => {
   })
 
   it('only references known field kinds', () => {
-    const kinds = new Set(['text', 'textarea', 'number', 'select', 'model-select', 'agent-select', 'boolean', 'keyvalue', 'stringlist', 'rows'])
+    const kinds = new Set(['text', 'textarea', 'number', 'select', 'model-select', 'agent-select', 'dataset-select', 'boolean', 'keyvalue', 'stringlist', 'rows'])
     NODE_TYPES.forEach((meta) => {
       meta.fields.forEach((field) => {
         expect(kinds.has(field.kind)).toBe(true)
       })
     })
+  })
+
+  it('declares the knowledge node with a dataset picker and retrieval overrides', () => {
+    const keys = nodeMeta('knowledge').fields.map((field) => field.key)
+    expect(keys).toEqual([
+      'retriever',
+      'dataset_ids',
+      'query',
+      'top_k',
+      'score_threshold',
+      'coarse_top_k',
+      'hybrid',
+      'rerank',
+      'output_var',
+    ])
+    expect(nodeMeta('knowledge').fields.find((field) => field.key === 'dataset_ids').kind).toBe('dataset-select')
   })
 
   it('declares a start node with no config fields', () => {

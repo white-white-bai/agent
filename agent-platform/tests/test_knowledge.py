@@ -12,15 +12,32 @@ from agent_platform.core.config import Settings
 from agent_platform.graph.schema import KnowledgeConfig
 from agent_platform.knowledge import embeddings as embeddings_mod
 from agent_platform.knowledge import retrievers as retrievers_mod
-from agent_platform.knowledge.embeddings import Embedder, cosine, hash_embed
-from agent_platform.knowledge.retrievers import build_retriever
-from agent_platform.knowledge.vector_store import (
-    add_document,
-    build_builtin_searcher,
+from agent_platform.knowledge.documents import (
+    add_segment,
+    create_document,
     delete_document,
     list_documents,
-    search_documents,
+    list_segments,
+    update_segment,
 )
+from agent_platform.knowledge.embeddings import Embedder, cosine, hash_embed
+from agent_platform.knowledge.retrievers import build_retriever
+from agent_platform.knowledge.vector_store import build_builtin_searcher, search_documents
+
+
+def _seed(tenant_code: str, dataset_id: str, name: str, content: str, embedding: list[float]):
+    """建一份文档 + 单个分段（旧的「一行即一分段」用例的最小等价物）。"""
+    document = create_document(
+        tenant_code=tenant_code, dataset_id=dataset_id, name=name, content=content, status="ready"
+    )
+    add_segment(
+        tenant_code=tenant_code,
+        dataset_id=dataset_id,
+        document_uuid=document.uuid,
+        content=content,
+        embedding=embedding,
+    )
+    return document
 
 
 def _patch_http(monkeypatch, module, handler, captured: list):
@@ -104,40 +121,26 @@ async def test_embedder_remote_mode_without_api_key(monkeypatch):
 # --------------------------------------------------------------------------- 内置向量库
 
 
-def test_add_list_and_delete_document():
-    document = add_document(
-        tenant_code="t",
-        dataset_id="d1",
-        title="常州政务",
-        content="常州天气查询办事指南",
-        embedding=hash_embed("常州天气查询办事指南"),
-        metadata={"source": "manual"},
-    )
-    assert document.uuid and document.doc_metadata == {"source": "manual"}
+def test_document_and_segment_lifecycle():
+    document = _seed("t", "d1", "常州政务", "常州天气查询办事指南", hash_embed("常州天气查询办事指南"))
+    assert document.uuid and document.name == "常州政务"
 
-    rows = list_documents("t")
-    assert [row.uuid for row in rows] == [document.uuid]
-    assert list_documents("t", "d1")[0].uuid == document.uuid
-    assert list_documents("t", "d2") == []
-    assert list_documents("other") == []
+    rows, total = list_documents("t")
+    assert total == 1 and [row.uuid for row in rows] == [document.uuid]
+    assert list_documents("t", "d1")[0][0].uuid == document.uuid
+    assert list_documents("t", "d2") == ([], 0)
+    assert list_documents("other") == ([], 0)
 
     assert delete_document(document.uuid) is True
     assert delete_document(document.uuid) is False
-    assert list_documents("t") == []
+    assert list_documents("t") == ([], 0)
 
 
 def test_search_documents_ranks_and_filters():
     content = "常州天气查询办事指南"
-    add_document(
-        tenant_code="t", dataset_id="d1", title="相关", content=content, embedding=hash_embed(content)
-    )
-    add_document(
-        tenant_code="t",
-        dataset_id="d2",
-        title="无关",
-        content="上海公积金提取流程",
-        embedding=hash_embed("上海公积金提取流程"),
-    )
+    _seed("t", "d1", "相关", content, hash_embed(content))
+    _seed("t", "d2", "无关", "上海公积金提取流程", hash_embed("上海公积金提取流程"))
+
     results = search_documents(tenant_code="t", query_vector=hash_embed(content), top_k=5)
     assert results[0]["document_name"] == "相关"
     assert results[0]["score"] == 1.0
@@ -152,11 +155,16 @@ def test_search_documents_ranks_and_filters():
     assert search_documents(tenant_code="t", query_vector=hash_embed(content), top_k=1) == results[:1]
 
 
-def test_search_documents_ignores_soft_deleted():
+def test_search_documents_ignores_soft_deleted_and_disabled():
     content = "常州天气查询"
-    document = add_document(
-        tenant_code="t", dataset_id="d1", title="x", content=content, embedding=hash_embed(content)
-    )
+    document = _seed("t", "d1", "x", content, hash_embed(content))
+    assert search_documents(tenant_code="t", query_vector=hash_embed(content))
+
+    segment = list_segments(document.uuid)[0][0]
+    update_segment(segment.uuid, enabled=0)
+    assert search_documents(tenant_code="t", query_vector=hash_embed(content)) == []
+
+    update_segment(segment.uuid, enabled=1)
     delete_document(document.uuid)
     assert search_documents(tenant_code="t", query_vector=hash_embed(content)) == []
 
@@ -164,9 +172,7 @@ def test_search_documents_ignores_soft_deleted():
 @pytest.mark.asyncio
 async def test_builtin_searcher_queries_store():
     content = "常州天气查询办事指南"
-    add_document(
-        tenant_code="t", dataset_id="d1", title="指南", content=content, embedding=hash_embed(content)
-    )
+    _seed("t", "d1", "指南", content, hash_embed(content))
     searcher = build_builtin_searcher(Settings(embedding_dim=256))
     results = await searcher(
         tenant_code="t", query=content, dataset_ids=["d1"], top_k=3, score_threshold=None
@@ -180,9 +186,7 @@ async def test_builtin_searcher_queries_store():
 @pytest.mark.asyncio
 async def test_retriever_builtin_kind_uses_vector_store():
     content = "常州天气查询办事指南"
-    add_document(
-        tenant_code="t", dataset_id="d1", title="指南", content=content, embedding=hash_embed(content)
-    )
+    _seed("t", "d1", "指南", content, hash_embed(content))
     retrieve = build_retriever(Settings())
     config = KnowledgeConfig(retriever="builtin", dataset_ids=["d1"])
     results = await retrieve(config, content, "t")
@@ -256,11 +260,7 @@ async def test_retriever_propagates_http_error(monkeypatch):
 
 def test_document_uuids_are_unique():
     content = "常州天气"
-    first = add_document(
-        tenant_code="t", dataset_id="d1", title="a", content=content, embedding=hash_embed(content)
-    )
-    second = add_document(
-        tenant_code="t", dataset_id="d1", title="b", content=content, embedding=hash_embed(content)
-    )
+    first = _seed("t", "d1", "a", content, hash_embed(content))
+    second = _seed("t", "d1", "b", content, hash_embed(content))
     assert first.uuid != second.uuid
     assert uuid.UUID(first.uuid).hex == first.uuid

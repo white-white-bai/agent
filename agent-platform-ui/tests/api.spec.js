@@ -1,12 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('@/api/client', () => ({ request: vi.fn(async () => ({ ok: true })) }))
+vi.mock('@/api/client', () => ({
+  request: vi.fn(async () => ({ ok: true })),
+  uploadRequest: vi.fn(async () => ({ ok: true })),
+}))
 
-import { request } from '@/api/client'
+import { request, uploadRequest } from '@/api/client'
 import * as api from '@/api'
 
 beforeEach(() => {
   request.mockClear()
+  uploadRequest.mockClear()
 })
 
 describe('api endpoint map', () => {
@@ -40,10 +44,19 @@ describe('api endpoint map', () => {
     ['listMcpServers', () => api.listMcpServers({ tenant_code: 't' }), '/admin/mcp-servers', { params: { tenant_code: 't' } }],
     ['createMcpServer', () => api.createMcpServer({ name: 's' }), '/admin/mcp-servers', { method: 'POST', body: { name: 's' } }],
     ['deleteMcpServer', () => api.deleteMcpServer('u'), '/admin/mcp-servers/u', { method: 'DELETE' }],
-    ['listDocuments', () => api.listDocuments({ dataset_id: 'd' }), '/admin/documents', { params: { dataset_id: 'd' } }],
-    ['createDocument', () => api.createDocument({ content: 'c' }), '/admin/documents', { method: 'POST', body: { content: 'c' } }],
+    ['listDatasets', () => api.listDatasets({ tenant_code: 't' }), '/admin/datasets', { params: { tenant_code: 't' } }],
+    ['createDataset', () => api.createDataset({ name: 'n' }), '/admin/datasets', { method: 'POST', body: { name: 'n' } }],
+    ['getDataset', () => api.getDataset('u'), '/admin/datasets/u', undefined],
+    ['updateDataset', () => api.updateDataset('u', { name: 'n' }), '/admin/datasets/u', { method: 'PUT', body: { name: 'n' } }],
+    ['deleteDataset', () => api.deleteDataset('u'), '/admin/datasets/u', { method: 'DELETE' }],
+    ['listDatasetDocuments', () => api.listDatasetDocuments('u', { page: 1 }), '/admin/datasets/u/documents', { params: { page: 1 } }],
+    ['createDatasetDocument', () => api.createDatasetDocument('u', { content: 'c' }), '/admin/datasets/u/documents', { method: 'POST', body: { content: 'c' } }],
     ['deleteDocument', () => api.deleteDocument('u'), '/admin/documents/u', { method: 'DELETE' }],
-    ['uploadDocument', () => api.uploadDocument('fd'), '/admin/documents/upload', { method: 'POST', body: 'fd' }],
+    ['reindexDocument', () => api.reindexDocument('u'), '/admin/documents/u/reindex', { method: 'POST' }],
+    ['listSegments', () => api.listSegments('u', { page: 1 }), '/admin/documents/u/segments', { params: { page: 1 } }],
+    ['updateSegment', () => api.updateSegment('s', { enabled: 0 }), '/admin/segments/s', { method: 'PUT', body: { enabled: 0 } }],
+    ['deleteSegment', () => api.deleteSegment('s'), '/admin/segments/s', { method: 'DELETE' }],
+    ['retrieveDataset', () => api.retrieveDataset('u', { query: 'q' }), '/admin/datasets/u/retrieve', { method: 'POST', body: { query: 'q' } }],
     ['listProviders', () => api.listProviders(), '/admin/providers', undefined],
     ['metricsOverview', () => api.metricsOverview({ days: 7 }), '/admin/metrics/overview', { params: { days: 7 } }],
   ]
@@ -55,5 +68,11 @@ describe('api endpoint map', () => {
     } else {
       expect(request).toHaveBeenCalledWith(path, options)
     }
+  })
+
+  it('uploadDatasetDocument posts FormData through uploadRequest with a progress callback', async () => {
+    const onProgress = () => {}
+    await api.uploadDatasetDocument('u', 'fd', onProgress)
+    expect(uploadRequest).toHaveBeenCalledWith('/admin/datasets/u/documents/upload', 'fd', { onProgress })
   })
 })

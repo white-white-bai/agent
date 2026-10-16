@@ -180,22 +180,94 @@ def test_mcp_server_crud(api_client):
     assert api_client.delete(f"/admin/mcp-servers/{created['uuid']}").status_code == 404
 
 
-# --------------------------------------------------------------------------- 文档
+# --------------------------------------------------------------------------- 知识库 / 文档 / 分段
 
 
-def test_document_crud(api_client):
-    created = api_client.post(
-        "/admin/documents",
-        json={"tenant_code": "t", "dataset_id": "d1", "title": "常州政务", "content": "常州天气查询办事指南"},
+def _create_dataset(api_client, *, tenant_code="t", name="知识库") -> dict:
+    response = api_client.post("/admin/datasets", json={"tenant_code": tenant_code, "name": name})
+    assert response.status_code == 200
+    return response.json()["data"]
+
+
+def test_dataset_crud(api_client):
+    created = _create_dataset(api_client)
+    assert created["name"] == "知识库" and created["uuid"]
+    assert api_client.post("/admin/datasets", json={"tenant_code": "t", "name": "  "}).status_code == 400
+
+    rows = api_client.get("/admin/datasets", params={"tenant_code": "t"}).json()["data"]
+    assert [row["uuid"] for row in rows] == [created["uuid"]]
+    assert rows[0]["document_count"] == 0
+
+    updated = api_client.put(
+        f"/admin/datasets/{created['uuid']}", json={"name": "改名", "retrieval": {"top_k": 3}}
     ).json()["data"]
-    assert created["title"] == "常州政务" and created["dataset_id"] == "d1"
+    assert updated["name"] == "改名" and updated["retrieval"] == {"top_k": 3}
 
-    rows = api_client.get("/admin/documents", params={"tenant_code": "t"}).json()["data"]
-    assert rows[0]["content"] == "常州天气查询办事指南"
+    assert api_client.delete(f"/admin/datasets/{created['uuid']}").json()["data"]["is_deleted"] == 1
+    assert api_client.delete(f"/admin/datasets/{created['uuid']}").status_code == 404
+    assert api_client.get("/admin/datasets", params={"tenant_code": "t"}).json()["data"] == []
+    assert api_client.get("/admin/datasets/ghost").status_code == 404
+
+
+def test_document_text_ingest_list_segments_and_delete(api_client):
+    dataset = _create_dataset(api_client)
+    created = api_client.post(
+        f"/admin/datasets/{dataset['uuid']}/documents",
+        json={"name": "常州政务", "content": "常州天气查询办事指南"},
+    ).json()["data"]
+    assert created["name"] == "常州政务" and created["dataset_id"] == dataset["uuid"]
+    assert created["status"] == "ready" and created["chunk_count"] == 1
+
+    listing = api_client.get(f"/admin/datasets/{dataset['uuid']}/documents").json()["data"]
+    assert listing["total"] == 1 and listing["items"][0]["uuid"] == created["uuid"]
+
+    segments = api_client.get(f"/admin/documents/{created['uuid']}/segments").json()["data"]
+    assert segments["total"] == 1 and segments["items"][0]["content"] == "常州天气查询办事指南"
+
+    assert api_client.post(
+        f"/admin/datasets/{dataset['uuid']}/documents", json={"content": "   "}
+    ).status_code == 400
+    assert api_client.post("/admin/datasets/ghost/documents", json={"content": "x"}).status_code == 404
 
     assert api_client.delete(f"/admin/documents/{created['uuid']}").json()["data"]["is_deleted"] == 1
     assert api_client.delete(f"/admin/documents/{created['uuid']}").status_code == 404
-    assert api_client.get("/admin/documents", params={"tenant_code": "t"}).json()["data"] == []
+    assert api_client.get(f"/admin/datasets/{dataset['uuid']}/documents").json()["data"]["total"] == 0
+
+
+def test_segment_update_toggle_and_delete(api_client):
+    dataset = _create_dataset(api_client)
+    document = api_client.post(
+        f"/admin/datasets/{dataset['uuid']}/documents", json={"name": "d", "content": "常州天气"}
+    ).json()["data"]
+    segment = api_client.get(f"/admin/documents/{document['uuid']}/segments").json()["data"]["items"][0]
+
+    updated = api_client.put(
+        f"/admin/segments/{segment['uuid']}", json={"content": "上海天气", "enabled": 0}
+    ).json()["data"]
+    assert updated["content"] == "上海天气" and updated["enabled"] == 0
+
+    assert api_client.delete(f"/admin/segments/{segment['uuid']}").json()["data"]["is_deleted"] == 1
+    assert api_client.delete(f"/admin/segments/{segment['uuid']}").status_code == 404
+    assert api_client.put("/admin/segments/ghost", json={"enabled": 1}).status_code == 404
+
+
+def test_dataset_retrieve_hit_test(api_client):
+    dataset = _create_dataset(api_client)
+    base = f"/admin/datasets/{dataset['uuid']}"
+    api_client.post(f"{base}/documents", json={"name": "指南", "content": "常州天气查询办事指南"})
+    other = api_client.post(f"{base}/documents", json={"name": "其它", "content": "汽车置换补贴标准"}).json()["data"]
+
+    hits = api_client.post(f"{base}/retrieve", json={"query": "常州天气"}).json()["data"]["hits"]
+    assert hits and hits[0]["document_name"] == "指南"
+    assert {"content", "document_name", "dataset_id", "position", "score"} <= set(hits[0])
+
+    # 停用分段后不再被召回
+    segment = api_client.get(f"/admin/documents/{other['uuid']}/segments").json()["data"]["items"][0]
+    api_client.put(f"/admin/segments/{segment['uuid']}", json={"enabled": 0})
+    disabled = api_client.post(f"{base}/retrieve", json={"query": "汽车置换"}).json()["data"]["hits"]
+    assert all(hit["document_name"] != "其它" for hit in disabled)
+
+    assert api_client.post("/admin/datasets/ghost/retrieve", json={"query": "x"}).status_code == 404
 
 
 # --------------------------------------------------------------------------- Dify 导入
@@ -337,39 +409,62 @@ def test_import_graph_file_rejects_oversized_upload(api_client, monkeypatch):
         get_settings.cache_clear()
 
 
-def test_upload_document_chunks_and_stores_each_chunk(api_client, monkeypatch):
+def test_upload_document_chunks_into_segments(api_client, monkeypatch):
     # 显式固定分块字符数：默认 800 时正文仅 758 字（40×17 + 39 个 "\n\n"），不足两块，用例会失真
     monkeypatch.setenv("AP_DOCUMENT_CHUNK_CHARS", "200")
     get_settings.cache_clear()
     try:
+        dataset = _create_dataset(api_client)
         body = ("常州政务大厅工作时间为周一至周五。\n\n" * 40).encode("utf-8")
-        response = _upload(api_client, "/admin/documents/upload", "guide.md", body, tenant_code="t", dataset_id="d1")
+        response = _upload(api_client, f"/admin/datasets/{dataset['uuid']}/documents/upload", "guide.md", body)
         assert response.status_code == 200
         data = response.json()["data"]
-        assert data["title"] == "guide" and data["dataset_id"] == "d1"
-        assert data["chunks"] >= 2 and len(data["uuids"]) == data["chunks"]
+        assert data["name"] == "guide" and data["file_type"] == ".md"
+        assert data["chunk_count"] >= 2 and data["status"] == "ready" and data["ingest"] == "sync"
 
-        rows = api_client.get("/admin/documents", params={"tenant_code": "t", "dataset_id": "d1"}).json()["data"]
-        assert len(rows) == data["chunks"]
-        assert {row["title"] for row in rows} == {"guide"}
-        assert all(row["metadata"]["source"] == "upload" for row in rows)
+        segments = api_client.get(f"/admin/documents/{data['uuid']}/segments").json()["data"]
+        assert segments["total"] == data["chunk_count"]
+        assert api_client.get(
+            f"/admin/datasets/{dataset['uuid']}/documents"
+        ).json()["data"]["items"][0]["chunk_count"] == data["chunk_count"]
+    finally:
+        get_settings.cache_clear()
+
+
+def test_upload_document_async_over_threshold(api_client, monkeypatch):
+    monkeypatch.setenv("AP_KNOWLEDGE_ASYNC_THRESHOLD_BYTES", "8")
+    get_settings.cache_clear()
+    try:
+        dataset = _create_dataset(api_client)
+        response = _upload(
+            api_client, f"/admin/datasets/{dataset['uuid']}/documents/upload", "big.md", b"x" * 64
+        )
+        assert response.status_code == 200
+        data = response.json()["data"]
+        # 未配 Redis 时走进程内后台任务：返回时可能已 ready，也可能仍 pending
+        assert data["ingest"] == "scheduled" and data["status"] in ("pending", "ready")
     finally:
         get_settings.cache_clear()
 
 
 def test_upload_document_decodes_gbk(api_client):
+    dataset = _create_dataset(api_client)
     body = "常州天气查询办事指南".encode("gb18030")
-    response = _upload(api_client, "/admin/documents/upload", "guide.txt", body, tenant_code="t")
+    response = _upload(api_client, f"/admin/datasets/{dataset['uuid']}/documents/upload", "guide.txt", body)
     assert response.status_code == 200
-    rows = api_client.get("/admin/documents", params={"tenant_code": "t"}).json()["data"]
-    assert rows[0]["content"] == "常州天气查询办事指南"
+    segments = api_client.get(
+        f"/admin/documents/{response.json()['data']['uuid']}/segments"
+    ).json()["data"]
+    assert segments["items"][0]["content"] == "常州天气查询办事指南"
 
 
 def test_upload_document_rejects_bad_suffix_and_empty_file(api_client):
-    bad_suffix = _upload(api_client, "/admin/documents/upload", "a.exe", b"x", tenant_code="t")
-    assert bad_suffix.status_code == 400
-    empty = _upload(api_client, "/admin/documents/upload", "a.txt", b"   \n\n  ", tenant_code="t")
+    dataset = _create_dataset(api_client)
+    path = f"/admin/datasets/{dataset['uuid']}/documents/upload"
+    assert _upload(api_client, path, "a.exe", b"x").status_code == 400
+    empty = _upload(api_client, path, "a.txt", b"   \n\n  ")
     assert empty.status_code == 400 and "为空" in empty.json()["detail"]
+    assert _upload(api_client, "/admin/datasets/ghost/documents/upload", "a.txt", b"x").status_code == 404
 
 
 # --------------------------------------------------------------------------- provider / 护栏配置
@@ -429,17 +524,21 @@ def _xlsx_bytes() -> bytes:
 
 
 def test_upload_document_accepts_xlsx(api_client):
+    dataset = _create_dataset(api_client)
     response = _upload(
-        api_client, "/admin/documents/upload", "表格.xlsx", _xlsx_bytes(), tenant_code="t", dataset_id="d1"
+        api_client, f"/admin/datasets/{dataset['uuid']}/documents/upload", "表格.xlsx", _xlsx_bytes()
     )
     assert response.status_code == 200
-    assert response.json()["data"]["chunks"] >= 1
-    rows = api_client.get("/admin/documents", params={"tenant_code": "t", "dataset_id": "d1"}).json()["data"]
-    assert any("常州" in row["content"] for row in rows)
+    assert response.json()["data"]["chunk_count"] >= 1
+    segments = api_client.get(
+        f"/admin/documents/{response.json()['data']['uuid']}/segments"
+    ).json()["data"]
+    assert any("常州" in item["content"] for item in segments["items"])
 
 
 def test_upload_document_rejects_unsupported_suffix(api_client):
-    response = _upload(api_client, "/admin/documents/upload", "app.exe", b"x", tenant_code="t")
+    dataset = _create_dataset(api_client)
+    response = _upload(api_client, f"/admin/datasets/{dataset['uuid']}/documents/upload", "app.exe", b"x")
     assert response.status_code == 400
     assert "不支持的文件类型" in response.json()["detail"]
 
@@ -448,14 +547,18 @@ def test_upload_document_enforces_configured_size_limit(api_client, monkeypatch)
     monkeypatch.setenv("AP_DOCUMENT_MAX_BYTES", "32")
     get_settings.cache_clear()
     try:
-        response = _upload(api_client, "/admin/documents/upload", "big.txt", b"x" * 128, tenant_code="t")
+        dataset = _create_dataset(api_client)
+        response = _upload(api_client, f"/admin/datasets/{dataset['uuid']}/documents/upload", "big.txt", b"x" * 128)
         assert response.status_code == 413
     finally:
         get_settings.cache_clear()
 
 
 def test_upload_document_reports_parse_failure(api_client):
-    response = _upload(api_client, "/admin/documents/upload", "bad.pdf", b"definitely not a pdf", tenant_code="t")
+    dataset = _create_dataset(api_client)
+    response = _upload(
+        api_client, f"/admin/datasets/{dataset['uuid']}/documents/upload", "bad.pdf", b"definitely not a pdf"
+    )
     assert response.status_code == 400
     assert "解析失败" in response.json()["detail"]
 

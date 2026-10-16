@@ -59,7 +59,7 @@ agent-platform/
   `POST /apps/{uuid}/graph/run`（body `{definition?, inputs}`，SSE 流式跑整张图，事件
   `node_start` / `token` / `node_end` / `final` / `error`）。两者都以传入的 `definition` 为准，
   缺省取当前草稿，**不写会话/消息**，也不影响对外 `/v1` 契约。
-- 配置：`/sensitive-words`、`/mcp-servers`、`/documents`（内置向量库，上传见下）、`/retrieval/config`（检索流水线只读回显）。
+- 配置：`/sensitive-words`、`/mcp-servers`、`/datasets`（知识库，含文档/分段，见下）、`/retrieval/config`（检索流水线只读回显）。
 - 智能体 / 工具 / 提示词：`GET|POST|PUT|DELETE /agents`、`/tools`（含 `POST /tools/{uuid}/test` 试调）、`/prompts`；
   图模板 `GET /graph/templates`、`GET /graph/templates/{key}`（见下）。
 - 账号：`POST /login`（免鉴权）、`GET /me`、`/users`、`/roles`（见下）。
@@ -206,9 +206,27 @@ UI 里换 / 复制 key 的位置是 **Settings → API Keys**。
 **降级是有声音的**：配了 host 但 SDK 缺失或初始化失败时，首次会记一条 warning 并降级为 no-op
 （`langfuse>=2,<3` 是依赖，与 compose 的 `langfuse/langfuse:2` 对应，v3 SDK 的 API 不同）。
 
-## 知识库文档与检索流水线
+## 知识库（对齐 Dify 的两层模型）与检索流水线
 
-**上传入库**（`POST /admin/documents/upload`）支持：
+知识库是**两层模型**：知识库（`ap_dataset`）→ 文档（`ap_document`，元数据）→ 分段（`ap_document_segment`，向量检索的最小单位）。
+知识库 uuid 即历史 `dataset_id`，知识检索节点的 `dataset_ids` 就是知识库 uuid（多选）。
+
+**管理接口**（均要求 `knowledge:read/write`，按 `principal.scope_tenant()` 收口租户）：
+
+| 方法 | 路由 | 说明 |
+| --- | --- | --- |
+| GET/POST | `/admin/datasets` | 知识库列表（含文档数）/ 新建 |
+| GET/PUT/DELETE | `/admin/datasets/{uuid}` | 详情 / 改名改配置 / 软删（级联文档与分段） |
+| GET | `/admin/datasets/{uuid}/documents` | 文档分页列表（状态/分段数/大小） |
+| POST | `/admin/datasets/{uuid}/documents` | 文本直接入库（1 文档 + 1 分段） |
+| POST | `/admin/datasets/{uuid}/documents/upload` | 上传文件：抽取 → 分块 → 向量化 |
+| POST | `/admin/datasets/{uuid}/retrieve` | **召回测试**，返回带分数命中 |
+| DELETE | `/admin/documents/{uuid}` | 删文档（级联删分段） |
+| POST | `/admin/documents/{uuid}/reindex` | 重传：清空分段后重跑入库 |
+| GET | `/admin/documents/{uuid}/segments` | 分段分页列表 |
+| PUT/DELETE | `/admin/segments/{uuid}` | 改内容（自动重嵌入）/ 启停 / 删 |
+
+**上传入库**（`POST /admin/datasets/{uuid}/documents/upload`）支持：
 
 | 类型 | 后缀 | 抽取方式 |
 | --- | --- | --- |
@@ -220,12 +238,19 @@ UI 里换 / 复制 key 的位置是 **Settings → API Keys**。
 |  | `.xls` | xlrd 同上 |
 
 单文件上限由 `AP_DOCUMENT_MAX_BYTES` 控制（默认 15MB），按 `AP_DOCUMENT_CHUNK_CHARS` 分块、相邻块可保留
-`AP_DOCUMENT_CHUNK_OVERLAP` 字重叠；每个分块单独向量化后落 `ap_document`。
+`AP_DOCUMENT_CHUNK_OVERLAP` 字重叠；每个分块单独向量化后落 `ap_document_segment`。
+
+**入库同步/异步**：文件字节数小于 `AP_KNOWLEDGE_ASYNC_THRESHOLD_BYTES`（默认 1MB）时同步入库并直接返回 `ready`；
+超过则先建 `status=pending` 的文档再异步入库。异步入库在 **Redis 可用时入 worker 队列**（`knowledge_ingest`），
+否则在 API 进程内起 `asyncio` 任务（compose 默认未启用 Redis，此时 worker 收不到任务）。文档状态 `pending/ready/failed`
+供前端轮询。
 
 **检索流水线**（`builtin` 检索器）：粗召回（向量）→ 精召回（混合，可选）→ 重排序（可选）→ 取 `top_k`。
+检索对象是**分段**（join 文档元数据，过滤未删文档与已停用分段）；命中字典保留 `content` / `document_name`
+（外加 `dataset_id` / `position` / `score`），以兼容 `metadata.retriever_resources` 契约。
 
 - **粗召回**：`AP_RETRIEVAL_COARSE_TOP_K` 控制向量候选数（0 表示直接用知识节点的 `top_k`），仍按节点 `score_threshold` 过滤。
-- **精召回（混合检索）**：`AP_RETRIEVAL_HYBRID_ENABLED=true` 时额外做关键词召回（查询词项命中数按文档长度开方归一），
+- **精召回（混合检索）**：`AP_RETRIEVAL_HYBRID_ENABLED=true` 时额外做关键词召回（查询词项命中数按分段长度开方归一），
   两路用 RRF 融合（`AP_RETRIEVAL_RRF_K`、`AP_RETRIEVAL_LEXICAL_TOP_K`）。
 - **重排序**：`AP_RERANK_ENABLED=true` 且配了 `AP_RERANK_BASE_URL` 时，对候选调 `POST {base_url}/rerank`
   （body `{model, query, documents, top_n}`，读 `{results:[{index, relevance_score}]}`），失败只记日志并回退。
@@ -238,6 +263,7 @@ UI 里换 / 复制 key 的位置是 **Settings → API Keys**。
 ```bash
 mysql -h host -P 3306 -u user -p agent_platform < sql/ddl.sql                    # 建表（幂等）
 mysql -h host -P 3306 -u user -p agent_platform < sql/migrate_history_summary.sql # 老库补记忆摘要列（幂等）
+mysql -h host -P 3306 -u user -p agent_platform < sql/migrate_knowledge_segments.sql # 老库把「文档即分段」迁成知识库两层模型（幂等）
 mysql -h host -P 3306 -u user -p agent_platform < sql/migrate_legacy_app.sql      # 存量 ai_monitor_app 导入
 ```
 

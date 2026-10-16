@@ -1,9 +1,16 @@
 from datetime import datetime, timezone
+from typing import ClassVar
 
 from sqlalchemy import JSON, DateTime, Integer, LargeBinary, String, Text, UniqueConstraint
+from sqlalchemy.dialects import mysql
 from sqlalchemy.orm import Mapped, mapped_column
 
 from agent_platform.core.db import Base
+
+# 知识库文档原文可达 15MB，MySQL 下需 LONGTEXT（Text 仅 64KB）；SQLite/其它方言仍用 TEXT
+LongText = Text().with_variant(mysql.LONGTEXT, "mysql")
+# 知识库三表统一排序规则：分段与文档按 uuid 关联，collation 不一致会触发 MySQL「Illegal mix of collations」
+KB_TABLE_ARGS: dict[str, str] = {"mysql_charset": "utf8mb4", "mysql_collate": "utf8mb4_unicode_ci"}
 
 
 def _now() -> datetime:
@@ -129,18 +136,65 @@ class Checkpoint(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
+class Dataset(Base):
+    """知识库：文档与分段的归属容器，携带默认检索配置。"""
+
+    __tablename__ = "ap_dataset"
+    __table_args__: ClassVar[dict[str, str]] = KB_TABLE_ARGS
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    tenant_code: Mapped[str] = mapped_column(String(64), index=True)
+    name: Mapped[str] = mapped_column(String(128), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    embedding_model: Mapped[str] = mapped_column(String(64), default="")
+    retrieval: Mapped[dict] = mapped_column(JSON, default=dict)
+    is_deleted: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
 class Document(Base):
+    """知识库文档元数据（正文以分段形式存放在 ap_document_segment）。"""
+
     __tablename__ = "ap_document"
+    __table_args__: ClassVar[dict[str, str]] = KB_TABLE_ARGS
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     uuid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     tenant_code: Mapped[str] = mapped_column(String(64), index=True)
     dataset_id: Mapped[str] = mapped_column(String(64), index=True, default="")
-    title: Mapped[str] = mapped_column(String(255), default="")
+    name: Mapped[str] = mapped_column(String(255), default="")
+    content: Mapped[str] = mapped_column(LongText, default="")
+    file_type: Mapped[str] = mapped_column(String(32), default="")
+    file_size: Mapped[int] = mapped_column(Integer, default=0)
+    char_count: Mapped[int] = mapped_column(Integer, default=0)
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(16), default="ready")
+    error: Mapped[str] = mapped_column(String(512), default="")
+    doc_metadata: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
+    created_by: Mapped[str] = mapped_column(String(64), default="")
+    is_deleted: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class DocumentSegment(Base):
+    """文档分段：向量检索的最小单位。"""
+
+    __tablename__ = "ap_document_segment"
+    __table_args__: ClassVar[dict[str, str]] = KB_TABLE_ARGS
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    tenant_code: Mapped[str] = mapped_column(String(64), index=True)
+    dataset_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    document_uuid: Mapped[str] = mapped_column(String(64), index=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
     content: Mapped[str] = mapped_column(Text, default="")
     embedding: Mapped[list] = mapped_column(JSON, default=list)
-    doc_metadata: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
-    is_deleted: Mapped[int] = mapped_column(Integer, default=0)
+    enabled: Mapped[int] = mapped_column(Integer, default=1)
+    hit_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 

@@ -16,7 +16,7 @@ agent 中台的独立管理端。Vue 3 + Vite + Element Plus + Pinia + vue-route
 | `/tools` | `ToolsView` | 生产级工具声明（参数 schema / 重试 / 兜底）与试调 |
 | `/prompts` | `PromptsView` | 少样本提示词模板（system 骨架 + 示例 + CoT 提示） |
 | `/mcp` | `McpServersView` | 工具（MCP server）配置 |
-| `/knowledge` | `KnowledgeView` | 知识库文档 |
+| `/knowledge` | `KnowledgeView` | 知识库：知识库列表（建/改/删）+ 文档管理（上传/进度/批量/重传/状态轮询）+ 分段查看编辑 + 召回测试 |
 | `/guards` | `GuardsView` | 护栏总开关、敏感词、配额 / 限流 / 轮次、兜底回复 |
 | `/accounts` | `AccountsView` | 账号与角色 |
 | `/metrics` | `MetricsView` | 监控看板（会话 / 消息 / 满意度 / Token / 异常趋势） |

@@ -8,8 +8,8 @@ import pytest
 from agent_platform.core.db import session_scope
 from agent_platform.domain.models import Conversation, Message
 from agent_platform.engine.context import EngineContext
+from agent_platform.knowledge.documents import create_document, get_document, list_segments
 from agent_platform.knowledge.embeddings import hash_embed
-from agent_platform.knowledge.vector_store import list_documents
 from agent_platform.worker import jobs as jobs_mod
 from agent_platform.worker import main as worker_main
 from agent_platform.worker.jobs import handle_job, knowledge_ingest, report_generate
@@ -77,27 +77,36 @@ async def test_handle_job_rejects_unknown_type():
 
 
 @pytest.mark.asyncio
-async def test_knowledge_ingest_stores_document():
-    result = await knowledge_ingest(
-        {
-            "tenant_code": "ing",
-            "dataset_id": "d1",
-            "title": "常州指南",
-            "content": "常州天气查询办事指南",
-            "metadata": {"source": "upload"},
-        }
+async def test_knowledge_ingest_builds_segments():
+    document = create_document(
+        tenant_code="ing",
+        dataset_id="d1",
+        name="常州指南",
+        content="常州天气查询办事指南",
+        status="pending",
     )
-    documents = list_documents("ing", "d1")
-    assert [row.uuid for row in documents] == [result["document_uuid"]]
-    assert documents[0].content == "常州天气查询办事指南"
-    assert documents[0].embedding == hash_embed("常州天气查询办事指南")
+    result = await knowledge_ingest({"document_uuid": document.uuid})
+    assert result == {"document_uuid": document.uuid, "chunks": 1}
+
+    ready = get_document(document.uuid)
+    assert ready.status == "ready" and ready.chunk_count == 1
+    assert ready.char_count == len("常州天气查询办事指南")
+
+    segments, total = list_segments(document.uuid)
+    assert total == 1 and segments[0].content == "常州天气查询办事指南"
+    assert segments[0].embedding == hash_embed("常州天气查询办事指南")
 
 
 @pytest.mark.asyncio
-async def test_knowledge_ingest_handles_empty_payload():
-    result = await knowledge_ingest({})
-    assert uuid.UUID(result["document_uuid"]).hex == result["document_uuid"]
-    assert list_documents("changzhou")[0].doc_metadata == {}
+async def test_knowledge_ingest_requires_document_uuid():
+    with pytest.raises(RuntimeError, match="缺少 document_uuid"):
+        await knowledge_ingest({})
+
+
+@pytest.mark.asyncio
+async def test_knowledge_ingest_missing_document_raises():
+    with pytest.raises(RuntimeError, match="文档不存在"):
+        await knowledge_ingest({"document_uuid": "ghost"})
 
 
 # --------------------------------------------------------------------------- 批处理

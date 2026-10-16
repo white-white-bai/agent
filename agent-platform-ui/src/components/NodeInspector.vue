@@ -12,6 +12,8 @@ const props = defineProps({
   modelOptions: { type: Array, default: () => [] },
   // 可用智能体：[{ value, label }]，来自 /admin/agents
   agentOptions: { type: Array, default: () => [] },
+  // 可用知识库：[{ value, label }]，来自 /admin/datasets
+  datasetOptions: { type: Array, default: () => [] },
 })
 const emit = defineEmits(['update', 'remove', 'run'])
 
@@ -108,8 +110,9 @@ function setTitle(value) {
           <el-select
             v-else-if="field.kind === 'select'"
             :model-value="fieldValue(field.key)"
+            :clearable="Boolean(field.nullable)"
             class="inspector__select"
-            @update:model-value="(value) => setField(field.key, value)"
+            @update:model-value="(value) => setField(field.key, field.nullable && (value === '' || value === undefined) ? null : value)"
           >
             <el-option v-for="option in field.options" :key="option" :label="option" :value="option" />
           </el-select>
@@ -139,6 +142,23 @@ function setTitle(value) {
           >
             <el-option
               v-for="option in agentOptions"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
+          </el-select>
+          <el-select
+            v-else-if="field.kind === 'dataset-select'"
+            :model-value="fieldValue(field.key) || []"
+            class="inspector__select"
+            multiple
+            clearable
+            filterable
+            placeholder="选择知识库"
+            @update:model-value="(value) => setField(field.key, value || [])"
+          >
+            <el-option
+              v-for="option in datasetOptions"
               :key="option.value"
               :label="option.label"
               :value="option.value"

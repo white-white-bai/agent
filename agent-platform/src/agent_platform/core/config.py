@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     document_max_bytes: int = 15 * 1024 * 1024
     document_chunk_chars: int = 800
     document_chunk_overlap: int = 0
+    # 上传超过该字节数走异步入库（Redis 可用入 worker 队列，否则进程内后台任务）；0 = 全部异步
+    knowledge_async_threshold_bytes: int = 1024 * 1024
 
     # 工具调用治理：参数校验 / 瞬时错误重试 / 失败兜底（兜底默认关）
     tool_validate: bool = True

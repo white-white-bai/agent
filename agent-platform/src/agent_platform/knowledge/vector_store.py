@@ -1,108 +1,91 @@
-"""内置向量库：文档落 MySQL（ap_document）；检索流水线 = 粗召回（向量）→ 精召回（混合，RRF）→ 重排序。"""
+"""内置向量库检索：文档元数据（ap_document）+ 分段（ap_document_segment）。
+
+检索流水线 = 粗召回（向量）→ 精召回（混合，RRF）→ 重排序。
+分段是检索的最小单位；命中字典保留 `content` / `document_name` 键，以兼容
+Dify 的 `metadata.retriever_resources` 契约（见 api/compat.py::trim_retriever_resources）。
+"""
 from __future__ import annotations
 
 import logging
 import math
-import uuid
 from typing import Any
 
 from sqlalchemy import select
 
 from agent_platform.core.config import Settings
 from agent_platform.core.db import session_scope
-from agent_platform.domain.models import Document
+from agent_platform.domain.models import Document, DocumentSegment
 from agent_platform.knowledge.embeddings import Embedder, cosine, tokenize
 from agent_platform.knowledge.retrieval import rerank_documents, rrf_merge
 
 logger = logging.getLogger(__name__)
 
 
-def add_document(
-    *,
-    tenant_code: str,
-    dataset_id: str,
-    title: str,
-    content: str,
-    embedding: list[float],
-    metadata: dict[str, Any] | None = None,
-) -> Document:
+def build_passages(tenant_code: str, dataset_ids: list[str] | None = None) -> list[dict[str, Any]]:
+    """组装可检索分段：join 文档元数据，过滤未删文档与已停用分段。"""
     with session_scope() as session:
-        document = Document(
-            uuid=uuid.uuid4().hex,
-            tenant_code=tenant_code,
-            dataset_id=dataset_id,
-            title=title,
-            content=content,
-            embedding=embedding,
-            doc_metadata=metadata or {},
+        stmt = (
+            select(DocumentSegment, Document.name)
+            .join(Document, Document.uuid == DocumentSegment.document_uuid)
+            .where(
+                DocumentSegment.tenant_code == tenant_code,
+                DocumentSegment.enabled == 1,
+                Document.is_deleted == 0,
+            )
         )
-        session.add(document)
-        session.flush()
-        return document
-
-
-def list_documents(tenant_code: str, dataset_id: str = "") -> list[Document]:
-    with session_scope() as session:
-        stmt = select(Document).where(Document.tenant_code == tenant_code, Document.is_deleted == 0)
-        if dataset_id:
-            stmt = stmt.where(Document.dataset_id == dataset_id)
-        return list(session.scalars(stmt.order_by(Document.id.desc())).all())
-
-
-def delete_document(uuid_value: str) -> bool:
-    with session_scope() as session:
-        document = session.scalar(select(Document).where(Document.uuid == uuid_value, Document.is_deleted == 0))
-        if document is None:
-            return False
-        document.is_deleted = 1
-        return True
-
-
-def fetch_documents(tenant_code: str, dataset_ids: list[str] | None = None) -> list[Document]:
-    with session_scope() as session:
-        stmt = select(Document).where(Document.tenant_code == tenant_code, Document.is_deleted == 0)
         if dataset_ids:
-            stmt = stmt.where(Document.dataset_id.in_(dataset_ids))
-        return list(session.scalars(stmt).all())
+            stmt = stmt.where(DocumentSegment.dataset_id.in_(dataset_ids))
+        rows = session.execute(stmt).all()
+        return [
+            {
+                "content": segment.content or "",
+                "embedding": list(segment.embedding or []),
+                "dataset_id": segment.dataset_id,
+                "document_name": name or "",
+                "position": segment.position,
+            }
+            for segment, name in rows
+        ]
 
 
-def _as_hit(document: Document, score: float) -> dict[str, Any]:
+def _as_hit(passage: dict[str, Any], score: float) -> dict[str, Any]:
     return {
-        "content": document.content,
-        "document_name": document.title,
-        "dataset_id": document.dataset_id,
+        "content": passage.get("content", ""),
+        "document_name": passage.get("document_name", ""),
+        "dataset_id": passage.get("dataset_id", ""),
+        "position": passage.get("position", 0),
         "score": round(score, 6),
     }
 
 
 def vector_hits(
-    documents: list[Document], query_vector: list[float], score_threshold: float | None = None
+    passages: list[dict[str, Any]], query_vector: list[float], score_threshold: float | None = None
 ) -> list[dict[str, Any]]:
     """粗召回：余弦相似度打分（可选阈值过滤），按分降序。"""
     hits: list[dict[str, Any]] = []
-    for document in documents:
-        score = cosine(query_vector, list(document.embedding or []))
+    for passage in passages:
+        score = cosine(query_vector, list(passage.get("embedding") or []))
         if score_threshold is not None and score < score_threshold:
             continue
-        hits.append(_as_hit(document, score))
+        hits.append(_as_hit(passage, score))
     hits.sort(key=lambda item: item["score"], reverse=True)
     return hits
 
 
-def lexical_hits(documents: list[Document], query: str) -> list[dict[str, Any]]:
-    """关键词召回：查询词项在文档中的命中数按文档长度开方归一（BM25 简化版）。"""
+def lexical_hits(passages: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
+    """关键词召回：查询词项在分段中的命中数按分段长度开方归一（BM25 简化版）。"""
     query_tokens = set(tokenize(query))
     if not query_tokens:
         return []
     hits: list[dict[str, Any]] = []
-    for document in documents:
-        tokens = tokenize(document.content or "")
+    for passage in passages:
+        tokens = tokenize(str(passage.get("content") or ""))
         if not tokens:
             continue
         overlap = sum(1 for token in tokens if token in query_tokens)
         if overlap <= 0:
             continue
-        hits.append(_as_hit(document, overlap / math.sqrt(len(tokens))))
+        hits.append(_as_hit(passage, overlap / math.sqrt(len(tokens))))
     hits.sort(key=lambda item: item["score"], reverse=True)
     return hits
 
@@ -116,12 +99,12 @@ def search_documents(
     score_threshold: float | None = None,
 ) -> list[dict[str, Any]]:
     """纯向量检索（默认路径，关闭混合/重排时行为与改造前一致）。"""
-    return vector_hits(fetch_documents(tenant_code, dataset_ids), query_vector, score_threshold)[:top_k]
+    return vector_hits(build_passages(tenant_code, dataset_ids), query_vector, score_threshold)[:top_k]
 
 
 async def retrieve_hits(
     *,
-    documents: list[Document],
+    passages: list[dict[str, Any]],
     query: str,
     query_vector: list[float],
     top_k: int,
@@ -137,9 +120,9 @@ async def retrieve_hits(
     重排序失败只记日志并回退，不阻断检索。
     """
     recall_k = coarse_top_k if coarse_top_k > 0 else top_k
-    candidates = vector_hits(documents, query_vector, score_threshold)[:recall_k]
+    candidates = vector_hits(passages, query_vector, score_threshold)[:recall_k]
     if hybrid:
-        lexical = lexical_hits(documents, query)[: lexical_top_k if lexical_top_k > 0 else recall_k]
+        lexical = lexical_hits(passages, query)[: lexical_top_k if lexical_top_k > 0 else recall_k]
         candidates = rrf_merge(candidates, lexical, k=rrf_k)
     if rerank and candidates:
         top_n = int(rerank.get("top_k") or 0) or top_k
@@ -187,10 +170,10 @@ def build_builtin_searcher(settings: Settings):
         hybrid: bool | None = None,
         rerank: bool | None = None,
     ) -> list[dict[str, Any]]:
-        documents = fetch_documents(tenant_code, dataset_ids)
+        passages = build_passages(tenant_code, dataset_ids)
         query_vector = await embedder.encode(query)
         return await retrieve_hits(
-            documents=documents,
+            passages=passages,
             query=query,
             query_vector=query_vector,
             top_k=top_k,

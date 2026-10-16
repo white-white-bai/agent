@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { getApp, getGraph, getGraphTemplate, importGraph, importGraphFile, listAgents, listGraphVersions, listProviders, publishGraph, rollbackGraph, runGraphStream, runNode, saveGraphDraft } from '@/api'
+import { getApp, getGraph, getGraphTemplate, importGraph, importGraphFile, listAgents, listDatasets, listGraphVersions, listProviders, publishGraph, rollbackGraph, runGraphStream, runNode, saveGraphDraft } from '@/api'
 import GraphCanvas from '@/components/GraphCanvas.vue'
 import NodeInspector from '@/components/NodeInspector.vue'
 import NodePalette from '@/components/NodePalette.vue'
@@ -38,6 +38,8 @@ const importWarnings = ref([])
 const modelOptions = ref([])
 // 可用智能体（/admin/agents），供 agent 节点的下拉使用
 const agentOptions = ref([])
+// 可用知识库（/admin/datasets），供 knowledge 节点的下拉使用
+const datasetOptions = ref([])
 
 // 运行（整图 / 单节点）
 const runDialog = ref(false)
@@ -77,6 +79,16 @@ async function loadAgentOptions() {
   }
 }
 
+async function loadDatasetOptions() {
+  try {
+    const rows = (await listDatasets({ tenant_code: (app.value && app.value.tenant_code) || '' })) || []
+    return rows.map((item) => ({ value: item.uuid, label: item.name || item.uuid }))
+  } catch {
+    // 拿不到知识库清单不阻断编辑器
+    return []
+  }
+}
+
 async function insertPipelineTemplate() {
   try {
     const template = await getGraphTemplate('pipeline.gov_consult')
@@ -104,6 +116,7 @@ async function load() {
     ready.value = true
     modelOptions.value = await loadModelOptions()
     agentOptions.value = await loadAgentOptions()
+    datasetOptions.value = await loadDatasetOptions()
   } catch (error) {
     ElMessage.error(error.message || '加载失败')
   } finally {
@@ -415,6 +428,7 @@ function onRemove(id) {
           :node="selected"
           :model-options="modelOptions"
           :agent-options="agentOptions"
+          :dataset-options="datasetOptions"
           @update="onUpdate"
           @remove="onRemove"
           @run="openNodeRun"

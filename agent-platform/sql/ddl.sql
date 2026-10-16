@@ -143,21 +143,62 @@ CREATE TABLE IF NOT EXISTS ap_checkpoint_write (
     KEY idx_ap_checkpoint_write_thread (thread_id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'LangGraph checkpoint 待写通道';
 
+CREATE TABLE IF NOT EXISTS ap_dataset (
+    id              BIGINT       NOT NULL AUTO_INCREMENT,
+    uuid            VARCHAR(64)  NOT NULL,
+    tenant_code     VARCHAR(64)  NOT NULL DEFAULT '',
+    name            VARCHAR(128) NOT NULL DEFAULT '',
+    description     TEXT         NULL,
+    embedding_model VARCHAR(64)  NOT NULL DEFAULT '',
+    retrieval       JSON         NULL,
+    is_deleted      INT          NOT NULL DEFAULT 0,
+    created_at      DATETIME     NOT NULL,
+    updated_at      DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_ap_dataset_uuid (uuid),
+    KEY idx_ap_dataset_tenant (tenant_code)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT '知识库（数据集）';
+
 CREATE TABLE IF NOT EXISTS ap_document (
     id          BIGINT       NOT NULL AUTO_INCREMENT,
     uuid        VARCHAR(64)  NOT NULL,
     tenant_code VARCHAR(64)  NOT NULL DEFAULT '',
     dataset_id  VARCHAR(64)  NOT NULL DEFAULT '',
-    title       VARCHAR(255) NOT NULL DEFAULT '',
-    content     TEXT         NULL,
-    embedding   JSON         NULL,
+    name        VARCHAR(255) NOT NULL DEFAULT '',
+    content     LONGTEXT     NULL,
+    file_type   VARCHAR(32)  NOT NULL DEFAULT '',
+    file_size   INT          NOT NULL DEFAULT 0,
+    char_count  INT          NOT NULL DEFAULT 0,
+    chunk_count INT          NOT NULL DEFAULT 0,
+    status      VARCHAR(16)  NOT NULL DEFAULT 'ready',
+    error       VARCHAR(512) NOT NULL DEFAULT '',
     metadata    JSON         NULL,
+    created_by  VARCHAR(64)  NOT NULL DEFAULT '',
     is_deleted  INT          NOT NULL DEFAULT 0,
     created_at  DATETIME     NOT NULL,
+    updated_at  DATETIME     NOT NULL,
     PRIMARY KEY (id),
     UNIQUE KEY uk_ap_document_uuid (uuid),
     KEY idx_ap_document_dataset (tenant_code, dataset_id)
-) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '内置向量库文档';
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT '知识库文档元数据';
+
+CREATE TABLE IF NOT EXISTS ap_document_segment (
+    id            BIGINT       NOT NULL AUTO_INCREMENT,
+    uuid          VARCHAR(64)  NOT NULL,
+    tenant_code   VARCHAR(64)  NOT NULL DEFAULT '',
+    dataset_id    VARCHAR(64)  NOT NULL DEFAULT '',
+    document_uuid VARCHAR(64)  NOT NULL,
+    position      INT          NOT NULL DEFAULT 0,
+    content       TEXT         NULL,
+    embedding     JSON         NULL,
+    enabled       INT          NOT NULL DEFAULT 1,
+    hit_count     INT          NOT NULL DEFAULT 0,
+    created_at    DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_ap_document_segment_uuid (uuid),
+    KEY idx_ap_document_segment_doc (document_uuid),
+    KEY idx_ap_document_segment_dataset (tenant_code, dataset_id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT '知识库文档分段';
 
 CREATE TABLE IF NOT EXISTS ap_mcp_server (
     id          BIGINT       NOT NULL AUTO_INCREMENT,

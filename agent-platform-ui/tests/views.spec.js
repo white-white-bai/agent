@@ -30,9 +30,20 @@ vi.mock('@/api', () => ({
   listMcpServers: vi.fn(async () => []),
   createMcpServer: vi.fn(async () => ({})),
   deleteMcpServer: vi.fn(async () => ({})),
-  listDocuments: vi.fn(async () => []),
-  createDocument: vi.fn(async () => ({})),
+  listDatasets: vi.fn(async () => []),
+  createDataset: vi.fn(async () => ({})),
+  getDataset: vi.fn(async () => ({})),
+  updateDataset: vi.fn(async () => ({})),
+  deleteDataset: vi.fn(async () => ({})),
+  listDatasetDocuments: vi.fn(async () => ({ items: [], total: 0 })),
+  createDatasetDocument: vi.fn(async () => ({})),
+  uploadDatasetDocument: vi.fn(async () => ({ ingest: 'sync', chunk_count: 1 })),
   deleteDocument: vi.fn(async () => ({})),
+  reindexDocument: vi.fn(async () => ({ ingest: 'sync' })),
+  listSegments: vi.fn(async () => ({ items: [], total: 0 })),
+  updateSegment: vi.fn(async () => ({})),
+  deleteSegment: vi.fn(async () => ({})),
+  retrieveDataset: vi.fn(async () => ({ hits: [] })),
   listProviders: vi.fn(async () => ({ llm: [], retriever: [], embedding: {}, observability: {} })),
   getRetrievalConfig: vi.fn(async () => null),
   listAgents: vi.fn(async () => []),
@@ -220,10 +231,20 @@ describe('McpServersView', () => {
 })
 
 describe('KnowledgeView', () => {
-  it('lists documents', async () => {
+  it('loads knowledge bases on mount and offers the create action', async () => {
     const { wrapper } = await mountView(KnowledgeView)
-    expect(api.listDocuments).toHaveBeenCalled()
-    expect(wrapper.text()).toContain('新增文档')
+    expect(api.listDatasets).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('新建')
+  })
+
+  it('loads documents when a knowledge base is selected', async () => {
+    api.listDatasets.mockResolvedValueOnce([{ uuid: 'ds1', name: '政务知识库', document_count: 2 }])
+    const { wrapper } = await mountView(KnowledgeView)
+    await flush()
+    expect(wrapper.text()).toContain('政务知识库')
+    await wrapper.find('.datasets__item').trigger('click')
+    await flush()
+    expect(api.listDatasetDocuments).toHaveBeenCalledWith('ds1', { page: 1, size: 50 })
   })
 })
 

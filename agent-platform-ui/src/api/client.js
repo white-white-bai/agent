@@ -87,6 +87,43 @@ export async function request(path, { method = 'GET', body, params } = {}) {
   return payload && typeof payload === 'object' && 'data' in payload ? payload.data : payload
 }
 
+// 带进度的文件上传（fetch 无上传进度事件，改用 XHR）
+export function uploadRequest(path, formData, { onProgress } = {}) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', path)
+    const token = getToken()
+    if (token) {
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+    }
+    if (onProgress) {
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          onProgress(Math.round((event.loaded / event.total) * 100))
+        }
+      }
+    }
+    xhr.onload = () => {
+      let payload = null
+      try {
+        payload = JSON.parse(xhr.responseText)
+      } catch {
+        payload = null
+      }
+      if (xhr.status === 401 && unauthorizedHandler) {
+        unauthorizedHandler()
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(payload && typeof payload === 'object' && 'data' in payload ? payload.data : payload)
+      } else {
+        reject(new ApiError(xhr.status, detailOf(payload, xhr.status)))
+      }
+    }
+    xhr.onerror = () => reject(new ApiError(0, '网络错误'))
+    xhr.send(formData)
+  })
+}
+
 // SSE 流式请求：逐条把事件回调出去（图运行用）
 export async function streamRequest(path, body, onEvent, { signal } = {}) {
   const headers = { 'Content-Type': 'application/json' }
