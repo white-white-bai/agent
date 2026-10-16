@@ -3,19 +3,22 @@ import { onBeforeUnmount, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import {
-  createDataset,
   createDatasetDocument,
   deleteDataset,
   deleteDocument,
+  getRetrievalConfig,
   listDatasetDocuments,
   listDatasets,
+  listProviders,
   reindexDocument,
   updateDataset,
   uploadDatasetDocument,
 } from '@/api'
+import ChunkSettingsForm from '@/components/knowledge/ChunkSettingsForm.vue'
 import DatasetPanel from '@/components/knowledge/DatasetPanel.vue'
 import DocumentTable from '@/components/knowledge/DocumentTable.vue'
 import HitTestDialog from '@/components/knowledge/HitTestDialog.vue'
+import KnowledgeWizard from '@/components/knowledge/KnowledgeWizard.vue'
 import SegmentDrawer from '@/components/knowledge/SegmentDrawer.vue'
 
 // 与后端 DOCUMENT_SUFFIXES 保持一致
@@ -32,12 +35,28 @@ let pollTimer = null
 
 const datasetDialog = ref(false)
 const datasetSaving = ref(false)
-const datasetForm = reactive({ uuid: '', name: '', description: '', top_k: null, score_threshold: null })
+const datasetForm = reactive({
+  uuid: '',
+  name: '',
+  description: '',
+  index_method: 'high_quality',
+  chunk_config: {},
+  retrieval_mode: 'vector',
+  rerank: false,
+  top_k: null,
+  score_threshold: null,
+})
+
+const wizardVisible = ref(false)
+const providers = ref({})
+const retrievalConfig = ref({})
 
 const uploadDialog = ref(false)
 const uploading = ref(false)
 const uploadFile = ref(null)
 const uploadProgress = ref(0)
+const uploadOverride = ref(false)
+const uploadChunkConfig = ref({})
 
 const textDialog = ref(false)
 const textSaving = ref(false)
@@ -101,8 +120,7 @@ function selectDataset(uuid) {
 }
 
 function openDatasetCreate() {
-  Object.assign(datasetForm, { uuid: '', name: '', description: '', top_k: null, score_threshold: null })
-  datasetDialog.value = true
+  wizardVisible.value = true
 }
 
 function openDatasetEdit(row) {
@@ -111,6 +129,10 @@ function openDatasetEdit(row) {
     uuid: row.uuid,
     name: row.name,
     description: row.description,
+    index_method: row.index_method || 'high_quality',
+    chunk_config: row.chunk_config || {},
+    retrieval_mode: config.mode || 'vector',
+    rerank: Boolean(config.rerank),
     top_k: config.top_k ?? null,
     score_threshold: config.score_threshold ?? null,
   })
@@ -126,15 +148,18 @@ async function submitDataset() {
     tenant_code: tenantFilter.value,
     name: datasetForm.name,
     description: datasetForm.description,
-    retrieval: { top_k: datasetForm.top_k ?? 5, score_threshold: datasetForm.score_threshold },
+    index_method: datasetForm.index_method,
+    chunk_config: datasetForm.chunk_config,
+    retrieval: {
+      mode: datasetForm.retrieval_mode,
+      rerank: datasetForm.rerank,
+      top_k: datasetForm.top_k ?? 5,
+      score_threshold: datasetForm.score_threshold,
+    },
   }
   datasetSaving.value = true
   try {
-    if (datasetForm.uuid) {
-      await updateDataset(datasetForm.uuid, payload)
-    } else {
-      await createDataset(payload)
-    }
+    await updateDataset(datasetForm.uuid, payload)
     datasetDialog.value = false
     ElMessage.success('已保存')
     await loadDatasets()
@@ -167,6 +192,8 @@ async function removeDataset(row) {
 function openUpload() {
   uploadFile.value = null
   uploadProgress.value = 0
+  uploadOverride.value = false
+  uploadChunkConfig.value = {}
   uploadDialog.value = true
 }
 
@@ -181,6 +208,9 @@ async function submitUpload() {
   }
   const body = new FormData()
   body.append('file', uploadFile.value)
+  if (uploadOverride.value) {
+    body.append('chunk_config', JSON.stringify(uploadChunkConfig.value))
+  }
   uploading.value = true
   uploadProgress.value = 0
   try {
@@ -258,8 +288,26 @@ function openHitTest() {
   hitTestVisible.value = true
 }
 
+async function loadMeta() {
+  try {
+    providers.value = (await listProviders()) || {}
+  } catch {
+    providers.value = {}
+  }
+  try {
+    retrievalConfig.value = (await getRetrievalConfig()) || {}
+  } catch {
+    retrievalConfig.value = {}
+  }
+}
+
+function onWizardCreated() {
+  loadDatasets()
+}
+
 onBeforeUnmount(stopPoll)
 loadDatasets()
+loadMeta()
 </script>
 
 <template>
@@ -303,13 +351,32 @@ loadDatasets()
       </div>
     </div>
 
-    <el-dialog v-model="datasetDialog" :title="datasetForm.uuid ? '编辑知识库' : '新建知识库'" width="520px">
+    <el-dialog v-model="datasetDialog" title="编辑知识库" width="640px">
       <el-form label-position="top">
         <el-form-item label="名称">
           <el-input v-model="datasetForm.name" />
         </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="datasetForm.description" type="textarea" :rows="2" />
+        </el-form-item>
+        <el-divider content-position="left">分段与清洗</el-divider>
+        <ChunkSettingsForm v-model="datasetForm.chunk_config" />
+        <el-divider content-position="left">索引与检索</el-divider>
+        <el-form-item label="索引方式">
+          <el-radio-group v-model="datasetForm.index_method">
+            <el-radio value="high_quality">高质量（向量化）</el-radio>
+            <el-radio value="economy">经济（仅关键词）</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="检索模式">
+          <el-radio-group v-model="datasetForm.retrieval_mode">
+            <el-radio value="vector">向量检索</el-radio>
+            <el-radio value="fulltext">全文检索</el-radio>
+            <el-radio value="hybrid">混合检索</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="Rerank">
+          <el-switch v-model="datasetForm.rerank" />
         </el-form-item>
         <el-form-item label="默认召回 top_k（召回测试用）">
           <el-input-number v-model="datasetForm.top_k" :min="1" controls-position="right" />
@@ -324,9 +391,9 @@ loadDatasets()
       </template>
     </el-dialog>
 
-    <el-dialog v-model="uploadDialog" title="上传文档" width="520px">
+    <el-dialog v-model="uploadDialog" title="上传文档" width="560px">
       <el-form label-position="top">
-        <el-form-item :label="`文件（${UPLOAD_ACCEPT}，单文件不超过 15MB，按段落分块入库）`">
+        <el-form-item :label="`文件（${UPLOAD_ACCEPT}，单文件不超过 15MB）`">
           <el-upload
             :auto-upload="false"
             :limit="1"
@@ -338,6 +405,9 @@ loadDatasets()
           </el-upload>
         </el-form-item>
         <el-progress v-if="uploading || uploadProgress" :percentage="uploadProgress" />
+        <el-divider />
+        <el-checkbox v-model="uploadOverride">覆盖知识库分段设置</el-checkbox>
+        <ChunkSettingsForm v-if="uploadOverride" v-model="uploadChunkConfig" />
       </el-form>
       <template #footer>
         <el-button @click="uploadDialog = false">取消</el-button>
@@ -362,6 +432,13 @@ loadDatasets()
 
     <SegmentDrawer v-model:visible="segmentsVisible" :document="segmentDoc" @changed="loadDocuments" />
     <HitTestDialog v-model:visible="hitTestVisible" :dataset="selectedDataset" />
+    <KnowledgeWizard
+      v-model:visible="wizardVisible"
+      :tenant-code="tenantFilter"
+      :providers="providers"
+      :retrieval="retrievalConfig"
+      @created="onWizardCreated"
+    />
   </div>
 </template>
 

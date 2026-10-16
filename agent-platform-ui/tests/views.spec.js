@@ -44,6 +44,7 @@ vi.mock('@/api', () => ({
   updateSegment: vi.fn(async () => ({})),
   deleteSegment: vi.fn(async () => ({})),
   retrieveDataset: vi.fn(async () => ({ hits: [] })),
+  previewChunks: vi.fn(async () => ({ chunks: [], total: 0 })),
   listProviders: vi.fn(async () => ({ llm: [], retriever: [], embedding: {}, observability: {} })),
   getRetrievalConfig: vi.fn(async () => null),
   listAgents: vi.fn(async () => []),
@@ -245,6 +246,15 @@ describe('KnowledgeView', () => {
     await wrapper.find('.datasets__item').trigger('click')
     await flush()
     expect(api.listDatasetDocuments).toHaveBeenCalledWith('ds1', { page: 1, size: 50 })
+  })
+
+  it('opens the create wizard when the panel emits create', async () => {
+    const { wrapper } = await mountView(KnowledgeView)
+    const wizard = wrapper.findComponent({ name: 'KnowledgeWizard' })
+    expect(wizard.props('visible')).toBe(false)
+    wrapper.findComponent({ name: 'DatasetPanel' }).vm.$emit('create')
+    await flush()
+    expect(wrapper.findComponent({ name: 'KnowledgeWizard' }).props('visible')).toBe(true)
   })
 })
 

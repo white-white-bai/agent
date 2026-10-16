@@ -57,6 +57,7 @@ describe('api endpoint map', () => {
     ['updateSegment', () => api.updateSegment('s', { enabled: 0 }), '/admin/segments/s', { method: 'PUT', body: { enabled: 0 } }],
     ['deleteSegment', () => api.deleteSegment('s'), '/admin/segments/s', { method: 'DELETE' }],
     ['retrieveDataset', () => api.retrieveDataset('u', { query: 'q' }), '/admin/datasets/u/retrieve', { method: 'POST', body: { query: 'q' } }],
+    ['previewChunks', () => api.previewChunks('fd'), '/admin/knowledge/preview', { method: 'POST', body: 'fd' }],
     ['listProviders', () => api.listProviders(), '/admin/providers', undefined],
     ['metricsOverview', () => api.metricsOverview({ days: 7 }), '/admin/metrics/overview', { params: { days: 7 } }],
   ]

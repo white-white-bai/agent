@@ -61,6 +61,7 @@ export const listSegments = (uuid, params) => request(`/admin/documents/${uuid}/
 export const updateSegment = (uuid, body) => request(`/admin/segments/${uuid}`, { method: 'PUT', body })
 export const deleteSegment = (uuid) => request(`/admin/segments/${uuid}`, { method: 'DELETE' })
 export const retrieveDataset = (uuid, body) => request(`/admin/datasets/${uuid}/retrieve`, { method: 'POST', body })
+export const previewChunks = (formData) => request('/admin/knowledge/preview', { method: 'POST', body: formData })
 
 // 智能体
 export const listAgents = (params) => request('/admin/agents', { params })

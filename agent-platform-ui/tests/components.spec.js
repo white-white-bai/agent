@@ -3,6 +3,8 @@ import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
 import BarChart from '@/components/BarChart.vue'
+import ChunkPreview from '@/components/knowledge/ChunkPreview.vue'
+import ChunkSettingsForm from '@/components/knowledge/ChunkSettingsForm.vue'
 import NodeInspector from '@/components/NodeInspector.vue'
 import NodePalette from '@/components/NodePalette.vue'
 import KeyValueEditor from '@/components/fields/KeyValueEditor.vue'
@@ -212,5 +214,49 @@ describe('NodeInspector', () => {
   it('renders the help hint for the end node outputs', () => {
     const wrapper = mount(NodeInspector, { props: { node: { id: 'end_1', type: 'end', title: '', config: { outputs: {} } } } })
     expect(wrapper.text()).toContain('值为裸表达式')
+  })
+})
+
+describe('ChunkSettingsForm', () => {
+  it('seeds defaults and emits a full config on change', async () => {
+    const wrapper = mount(ChunkSettingsForm, { props: { modelValue: {} } })
+    expect(wrapper.text()).toContain('分段标识符')
+
+    const number = wrapper.findAllComponents({ name: 'ElInputNumber' })[0]
+    number.vm.$emit('update:modelValue', 128)
+    number.vm.$emit('change', 128)
+    const config = wrapper.emitted('update:modelValue').at(-1)[0]
+    expect(config.max_chars).toBe(128)
+    expect(config.preprocess).toEqual({ replace_whitespace: true, remove_urls_emails: false })
+    expect(config.qa_mode).toBe(false)
+  })
+
+  it('reflects a provided config', () => {
+    const wrapper = mount(ChunkSettingsForm, {
+      props: {
+        modelValue: {
+          max_chars: 300,
+          qa_mode: true,
+          preprocess: { replace_whitespace: false, remove_urls_emails: true },
+        },
+      },
+    })
+    expect(wrapper.findAllComponents({ name: 'ElInputNumber' })[0].props('modelValue')).toBe(300)
+    expect(wrapper.text()).toContain('Q&A')
+  })
+})
+
+describe('ChunkPreview', () => {
+  it('shows the estimated chunk count and each chunk', () => {
+    const wrapper = mount(ChunkPreview, {
+      props: { chunks: [{ position: 0, content: '甲' }, { position: 1, content: '乙' }], total: 2 },
+    })
+    expect(wrapper.text()).toContain('2 预估块')
+    expect(wrapper.findAll('.preview__item')).toHaveLength(2)
+  })
+
+  it('shows an empty hint when there are no chunks', () => {
+    const wrapper = mount(ChunkPreview)
+    expect(wrapper.text()).toContain('点击「预览块」查看分段结果')
   })
 })
