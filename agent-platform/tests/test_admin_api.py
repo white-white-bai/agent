@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
+from typing import Any
 
 import httpx
 
+from agent_platform.api import admin as admin_mod
 from agent_platform.core.config import get_settings
 from agent_platform.tools import mcp_bridge as bridge_mod
 
@@ -693,6 +696,85 @@ def test_run_graph_streams_node_and_final_events(api_client):
 def test_run_graph_requires_an_existing_app(api_client):
     response = api_client.post("/admin/apps/ghost/graph/run", json={"definition": RUN_GRAPH, "inputs": {}})
     assert response.status_code == 404
+
+
+class _RecordingSpan:
+    def __init__(self, ends: list) -> None:
+        self._ends = ends
+
+    def end(self, output: Any = None, error: str = "") -> None:
+        self._ends.append({"output": output, "error": error})
+
+
+class _RecordingTracer:
+    """记录 span 的假 tracer：验证编辑器运行链路也埋点。"""
+
+    enabled = True
+
+    def __init__(self) -> None:
+        self.spans: list[tuple[str, str]] = []
+        self.ends: list[dict] = []
+        self.flushed = 0
+
+    @contextmanager
+    def node_span(self, node_id: str, node_type: str, payload: Any = None) -> Any:
+        self.spans.append((node_id, node_type))
+        span = _RecordingSpan(self.ends)
+        try:
+            yield span
+        except Exception as exc:
+            span.end(error=str(exc))
+            raise
+
+    def flush(self) -> None:
+        self.flushed += 1
+
+
+def test_run_node_records_trace_span(api_client, monkeypatch):
+    tracer = _RecordingTracer()
+    monkeypatch.setattr(admin_mod, "build_request_tracer", lambda user, metadata, **kwargs: tracer)
+    created = _create_app(api_client)
+    response = api_client.post(
+        f"/admin/apps/{created['uuid']}/graph/run-node",
+        json={"node_id": "llm2", "definition": RUN_GRAPH, "inputs": {"query": "常州"}},
+    )
+    assert response.status_code == 200
+    assert tracer.spans == [("llm2", "llm")]
+    assert tracer.ends == [{"output": {"query": "常州", "llm2": "echo:常州", "text": "echo:常州"}, "error": ""}]
+    assert tracer.flushed == 1
+
+
+def test_run_graph_records_trace_spans(api_client, monkeypatch):
+    tracer = _RecordingTracer()
+    monkeypatch.setattr(admin_mod, "build_request_tracer", lambda user, metadata, **kwargs: tracer)
+    created = _create_app(api_client)
+    response = api_client.post(
+        f"/admin/apps/{created['uuid']}/graph/run",
+        json={"definition": RUN_GRAPH, "inputs": {"query": "常州"}},
+    )
+    assert response.status_code == 200
+    assert [item[0] for item in tracer.spans] == ["start1", "llm2", "answer3", "end4"]
+    assert [item[1] for item in tracer.spans] == ["start", "llm", "answer", "end"]
+    assert tracer.flushed == 1
+
+
+def test_run_node_still_reports_errors_with_tracing(api_client, monkeypatch):
+    tracer = _RecordingTracer()
+    monkeypatch.setattr(admin_mod, "build_request_tracer", lambda user, metadata, **kwargs: tracer)
+    created = _create_app(api_client)
+    graph = {
+        "nodes": [
+            {"id": "start1", "type": "start"},
+            {"id": "llm2", "type": "llm", "config": {"user_prompt": "{{ missing_var }}"}},
+        ]
+    }
+    response = api_client.post(
+        f"/admin/apps/{created['uuid']}/graph/run-node",
+        json={"node_id": "llm2", "definition": graph, "inputs": {}},
+    )
+    assert response.status_code == 400
+    assert tracer.spans == [("llm2", "llm")]
+    assert tracer.flushed == 1
 
 
 def test_get_guard_config_returns_effective_switches(api_client, monkeypatch):

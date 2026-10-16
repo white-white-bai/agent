@@ -12,7 +12,13 @@ from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
 from agent_platform.api import graph_templates, services
-from agent_platform.api.deps import get_current_admin, get_engine_context, require_admin, require_permission
+from agent_platform.api.deps import (
+    build_request_tracer,
+    get_current_admin,
+    get_engine_context,
+    require_admin,
+    require_permission,
+)
 from agent_platform.api.schemas import (
     AgentUpsertRequest,
     AppCreateRequest,
@@ -736,6 +742,7 @@ async def run_graph_node(
     app_uuid: str,
     request: RunNodeRequest,
     ctx: EngineContext = Depends(get_engine_context),
+    principal: AdminPrincipal = Depends(get_current_admin),
 ) -> dict[str, Any]:
     """单节点运行：不做上游推导，直接把 inputs 当可用变量执行该节点。"""
     app_row = services.get_app_by_uuid(app_uuid)
@@ -745,10 +752,18 @@ async def run_graph_node(
     if graph_def.node(request.node_id) is None:
         raise HTTPException(status_code=404, detail="节点不存在")
     ctx.tenant_code = app_row.tenant_code
+    tracer = build_request_tracer(
+        principal.username,
+        {"app_id": app_row.app_id, "node_id": request.node_id, "source": "editor-node-run"},
+        name="node-run",
+    )
+    ctx.tracer = tracer
     try:
         result = await run_node(graph_def, request.node_id, request.inputs, ctx)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"节点执行失败: {exc}") from exc
+    finally:
+        tracer.flush()
     return {"data": result}
 
 
@@ -757,6 +772,7 @@ async def run_graph_stream(
     app_uuid: str,
     request: RunGraphRequest,
     ctx: EngineContext = Depends(get_engine_context),
+    principal: AdminPrincipal = Depends(get_current_admin),
 ) -> StreamingResponse:
     """整图运行：基于传入的图定义（缺省取草稿）流式跑一遍，事件 node_start/token/node_end/final/error。"""
     app_row = services.get_app_by_uuid(app_uuid)
@@ -764,6 +780,12 @@ async def run_graph_stream(
         raise HTTPException(status_code=404, detail="应用不存在")
     graph_def = _resolve_run_definition(app_uuid, request.definition)
     ctx.tenant_code = app_row.tenant_code
+    tracer = build_request_tracer(
+        principal.username,
+        {"app_id": app_row.app_id, "source": "editor-graph-run"},
+        name="graph-run",
+    )
+    ctx.tracer = tracer
 
     async def _events() -> AsyncIterator[str]:
         try:
@@ -772,6 +794,8 @@ async def run_graph_stream(
         except Exception as exc:  # noqa: BLE001 - 流式接口要把错误作为事件回传，不能直接抛
             payload = {"type": "error", "message": str(exc)}
             yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        finally:
+            tracer.flush()
 
     return StreamingResponse(
         _events(),

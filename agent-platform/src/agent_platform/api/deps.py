@@ -34,8 +34,10 @@ def get_concurrency_limiter() -> ConcurrencyLimiter:
     return ConcurrencyLimiter(get_settings())
 
 
-def build_request_tracer(user: str = "", metadata: dict[str, Any] | None = None) -> Any:
-    return build_tracer(get_settings(), name="chat-messages", user_id=user, metadata=metadata or {})
+def build_request_tracer(
+    user: str = "", metadata: dict[str, Any] | None = None, *, name: str = "chat-messages"
+) -> Any:
+    return build_tracer(get_settings(), name=name, user_id=user, metadata=metadata or {})
 
 
 def new_id() -> str:

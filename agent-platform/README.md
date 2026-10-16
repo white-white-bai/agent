@@ -160,7 +160,17 @@ python -m agent_platform.importer app.yml --llm-provider deepseek --retriever li
 
 ## 链路追踪（Langfuse）
 
-对话链路每个节点一个 span（`node_type` / 输入 / 输出 / 耗时 / 错误），由 `observability/langfuse.py` 上报。
+对话与编排调试链路每个节点一个 span（`node_type` / 输入 / 输出 / 耗时 / 错误），由 `observability/langfuse.py` 上报。
+
+| 入口 | trace 名 | 说明 |
+| --- | --- | --- |
+| `POST /v1/chat-messages`（含 transfer 链路） | `chat-messages` | 对外对话，`user_id` = 请求里的 user |
+| `POST /admin/apps/{uuid}/graph/run`（编辑器「运行」） | `graph-run` | metadata 带 `app_id` / `source=editor-graph-run` |
+| `POST /admin/apps/{uuid}/graph/run-node`（编辑器「运行此节点」） | `node-run` | metadata 带 `app_id` / `node_id` / `source=editor-node-run` |
+
+埋点在 `engine/builder.py::_node_fn`（整图，包住每个节点的 runner）；单节点运行不走 `build_graph`，
+由 `engine/runtime.py::run_node` 手动补一个节点 span。tracer 通过 `ctx.tracer` 注入，`get_engine_context()`
+每请求新建上下文，所以不会串请求。
 
 ```bash
 # 三个变量放在 .env；compose 里把 host 覆盖成容器内地址

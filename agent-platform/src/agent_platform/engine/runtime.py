@@ -43,8 +43,16 @@ async def run_node(
         raise ValueError(f"节点不存在: {node_id}")
     runner = RUNNERS[node.type]
     state: GraphState = {"inputs": dict(inputs), "variables": dict(inputs)}
-    outcome = runner(node, state, ctx)
-    result: GraphState = await outcome if inspect.isawaitable(outcome) else outcome
+    tracer = getattr(ctx, "tracer", None)
+    if tracer is not None and getattr(tracer, "enabled", False):
+        # 单节点运行不走 build_graph，这里手动补一个节点 span
+        with tracer.node_span(node_id, node.type.value, payload=state["variables"]) as span:
+            outcome = runner(node, state, ctx)
+            result: GraphState = await outcome if inspect.isawaitable(outcome) else outcome
+            span.end(output=result.get("variables"))
+    else:
+        outcome = runner(node, state, ctx)
+        result = await outcome if inspect.isawaitable(outcome) else outcome
     variables = result.get("variables", {})
     # 多数节点把产出写在 variables[node_id]；answer/end 写在 answer，condition/classifier 写在 route
     output = variables.get(node_id)
