@@ -270,6 +270,76 @@ def test_dataset_retrieve_hit_test(api_client):
     assert api_client.post("/admin/datasets/ghost/retrieve", json={"query": "x"}).status_code == 404
 
 
+def test_dataset_stores_index_method_and_chunk_config(api_client):
+    created = _create_dataset(api_client)
+    assert created["index_method"] == "high_quality" and created["chunk_config"] == {}
+
+    updated = api_client.put(
+        f"/admin/datasets/{created['uuid']}",
+        json={"name": "改名", "index_method": "economy", "chunk_config": {"max_chars": 300, "qa_mode": True}},
+    ).json()["data"]
+    assert updated["index_method"] == "economy"
+    assert updated["chunk_config"]["max_chars"] == 300 and updated["chunk_config"]["qa_mode"] is True
+
+
+def test_preview_chunks_from_text(api_client):
+    response = api_client.post(
+        "/admin/knowledge/preview",
+        data={"text": "第一段。\n\n第二段。", "chunk_config": json.dumps({"max_chars": 100})},
+    )
+    data = response.json()["data"]
+    assert data["total"] == 1 and data["chunks"][0]["content"] == "第一段。\n\n第二段。"
+    assert data["char_count"] == len("第一段。\n\n第二段。")
+
+    assert api_client.post("/admin/knowledge/preview", data={"text": "  "}).status_code == 400
+    assert api_client.post(
+        "/admin/knowledge/preview", data={"text": "x", "chunk_config": "{oops"}
+    ).status_code == 400
+
+
+def test_preview_chunks_from_upload(api_client):
+    response = api_client.post(
+        "/admin/knowledge/preview",
+        files={"file": ("a.md", "甲。\n\n乙。".encode(), "text/markdown")},
+        data={"chunk_config": json.dumps({"max_chars": 100})},
+    )
+    assert response.status_code == 200
+    assert response.json()["data"]["total"] == 1
+
+
+def test_upload_document_honours_chunk_config_override(api_client):
+    dataset = _create_dataset(api_client)
+    body = ("甲" * 30 + "\n\n" + "乙" * 30).encode("utf-8")
+    response = _upload(
+        api_client,
+        f"/admin/datasets/{dataset['uuid']}/documents/upload",
+        "a.md",
+        body,
+        chunk_config=json.dumps({"max_chars": 10}),
+    )
+    data = response.json()["data"]
+    assert data["chunk_config"]["max_chars"] == 10
+    segments = api_client.get(f"/admin/documents/{data['uuid']}/segments").json()["data"]
+    assert segments["total"] == 6
+
+
+def test_create_document_with_chunk_config(api_client):
+    dataset = _create_dataset(api_client)
+    created = api_client.post(
+        f"/admin/datasets/{dataset['uuid']}/documents",
+        json={"name": "d", "content": "甲" * 25, "chunk_config": {"max_chars": 10}},
+    ).json()["data"]
+    assert created["chunk_config"]["max_chars"] == 10 and created["chunk_count"] == 3
+
+
+def test_upload_rejects_bad_chunk_config(api_client):
+    dataset = _create_dataset(api_client)
+    response = _upload(
+        api_client, f"/admin/datasets/{dataset['uuid']}/documents/upload", "a.md", b"hello", chunk_config="{oops"
+    )
+    assert response.status_code == 400 and "chunk_config" in response.json()["detail"]
+
+
 # --------------------------------------------------------------------------- Dify 导入
 
 
@@ -432,19 +502,17 @@ def test_upload_document_chunks_into_segments(api_client, monkeypatch):
 
 
 def test_upload_document_async_over_threshold(api_client, monkeypatch):
-    monkeypatch.setenv("AP_KNOWLEDGE_ASYNC_THRESHOLD_BYTES", "8")
-    get_settings.cache_clear()
-    try:
-        dataset = _create_dataset(api_client)
-        response = _upload(
-            api_client, f"/admin/datasets/{dataset['uuid']}/documents/upload", "big.md", b"x" * 64
-        )
-        assert response.status_code == 200
-        data = response.json()["data"]
-        # 未配 Redis 时走进程内后台任务：返回时可能已 ready，也可能仍 pending
-        assert data["ingest"] == "scheduled" and data["status"] in ("pending", "ready")
-    finally:
-        get_settings.cache_clear()
+    # 直接改 settings 实例：走 env+cache_clear 时，异步入库的后台任务可能在 env 还原前
+    # 重新填充缓存，把 threshold 泄漏给后续用例（曾导致 xlsx 上传被判为异步、chunk_count 为 0）。
+    monkeypatch.setattr(get_settings(), "knowledge_async_threshold_bytes", 8)
+    dataset = _create_dataset(api_client)
+    response = _upload(
+        api_client, f"/admin/datasets/{dataset['uuid']}/documents/upload", "big.md", b"x" * 64
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    # 未配 Redis 时走进程内后台任务：返回时可能已 ready，也可能仍 pending
+    assert data["ingest"] == "scheduled" and data["status"] in ("pending", "ready")
 
 
 def test_upload_document_decodes_gbk(api_client):

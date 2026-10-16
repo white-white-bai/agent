@@ -47,6 +47,7 @@ def build_retriever(settings: Settings) -> Retriever:
                 coarse_top_k=config.coarse_top_k,
                 hybrid=config.hybrid,
                 rerank=config.rerank,
+                mode=config.mode,
             )
         if config.retriever == "light_rag":
             return await _http_retrieve(

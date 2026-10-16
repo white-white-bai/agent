@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 from pathlib import PurePath
 from typing import Any
 
-from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
@@ -354,6 +354,8 @@ def _dataset_dict(row: Any, document_count: int = 0) -> dict[str, Any]:
         "name": row.name,
         "description": row.description,
         "embedding_model": row.embedding_model,
+        "index_method": row.index_method or "high_quality",
+        "chunk_config": row.chunk_config or {},
         "retrieval": row.retrieval or {},
         "document_count": document_count,
         "created_at": _iso(row.created_at),
@@ -373,11 +375,23 @@ def _document_dict(row: Any) -> dict[str, Any]:
         "chunk_count": row.chunk_count,
         "status": row.status,
         "error": row.error,
+        "chunk_config": row.chunk_config or {},
         "metadata": row.doc_metadata or {},
         "created_by": row.created_by,
         "created_at": _iso(row.created_at),
         "updated_at": _iso(row.updated_at),
     }
+
+
+def _parse_chunk_config(raw: str) -> dict[str, Any]:
+    """上传/预览表单里的 chunk_config 是 JSON 字符串（可空）。"""
+    if not raw or not raw.strip():
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="chunk_config 不是合法 JSON") from exc
+    return data if isinstance(data, dict) else {}
 
 
 def _segment_dict(row: Any) -> dict[str, Any]:
@@ -424,6 +438,8 @@ def create_dataset(request: DatasetUpsertRequest, principal: AdminPrincipal = De
         description=request.description,
         retrieval=request.retrieval,
         embedding_model=request.embedding_model,
+        index_method=request.index_method,
+        chunk_config=request.chunk_config,
     )
     return {"data": _dataset_dict(row)}
 
@@ -449,6 +465,8 @@ def update_dataset(
         description=request.description,
         retrieval=request.retrieval if request.retrieval else None,
         embedding_model=request.embedding_model or None,
+        index_method=request.index_method or None,
+        chunk_config=request.chunk_config if request.chunk_config else None,
         tenant_code=principal.tenant_code,
     )
     if row is None:
@@ -497,6 +515,7 @@ async def create_dataset_document(
         file_type="text",
         file_size=len(request.content.encode("utf-8")),
         status="pending",
+        chunk_config=request.chunk_config,
         metadata=request.metadata,
         created_by=principal.username,
     )
@@ -508,6 +527,7 @@ async def create_dataset_document(
 async def upload_dataset_document(
     dataset_uuid: str,
     file: UploadFile,
+    chunk_config: str = Form(""),
     principal: AdminPrincipal = Depends(get_current_admin),
 ) -> dict[str, Any]:
     from agent_platform.knowledge import documents as documents_mod
@@ -528,6 +548,7 @@ async def upload_dataset_document(
         file_type=PurePath(filename).suffix.lower(),
         file_size=size,
         status="pending",
+        chunk_config=_parse_chunk_config(chunk_config),
         metadata={"source": "upload", "filename": filename},
         created_by=principal.username,
     )
@@ -538,6 +559,31 @@ async def upload_dataset_document(
     else:
         ingest = dispatch_ingest(document.uuid)
     return {"data": {**_document_dict(documents_mod.get_document(document.uuid)), "ingest": ingest}}
+
+
+@router.post("/knowledge/preview", dependencies=[Depends(require_permission("knowledge:read"))])
+async def preview_chunks(
+    file: UploadFile | None = File(None),
+    text: str = Form(""),
+    chunk_config: str = Form(""),
+) -> dict[str, Any]:
+    """分段预览：按给定 chunk_config 清洗分块，不落库（知识库尚不存在时也能用）。"""
+    from agent_platform.knowledge.chunking import chunk_document, normalize_config
+
+    config = normalize_config(_parse_chunk_config(chunk_config))
+    raw = text
+    if file is not None and (file.filename or ""):
+        raw = await read_document(file, DOCUMENT_SUFFIXES)
+    if not raw.strip():
+        raise HTTPException(status_code=400, detail="请提供文件或文本")
+    chunks = chunk_document(raw, config)
+    return {
+        "data": {
+            "chunks": [{"position": index, "content": content} for index, content in enumerate(chunks)],
+            "total": len(chunks),
+            "char_count": len(raw),
+        }
+    }
 
 
 @router.delete("/documents/{document_uuid}", dependencies=[Depends(require_permission("knowledge:write"))])
@@ -635,6 +681,7 @@ async def retrieve_dataset(
         coarse_top_k=config.get("coarse_top_k"),
         hybrid=config.get("hybrid"),
         rerank=config.get("rerank"),
+        mode=config.get("mode"),
     )
     return {"data": {"query": request.query, "top_k": top_k, "hits": hits}}
 

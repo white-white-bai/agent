@@ -35,6 +35,8 @@ def create_dataset(
     description: str = "",
     retrieval: dict[str, Any] | None = None,
     embedding_model: str = "",
+    index_method: str = "high_quality",
+    chunk_config: dict[str, Any] | None = None,
     uuid_value: str = "",
 ) -> Dataset:
     with session_scope() as session:
@@ -44,6 +46,8 @@ def create_dataset(
             name=name,
             description=description,
             embedding_model=embedding_model,
+            index_method=index_method or "high_quality",
+            chunk_config=chunk_config or {},
             retrieval=retrieval or {},
         )
         session.add(row)
@@ -58,6 +62,8 @@ def update_dataset(
     description: str | None = None,
     retrieval: dict[str, Any] | None = None,
     embedding_model: str | None = None,
+    index_method: str | None = None,
+    chunk_config: dict[str, Any] | None = None,
     tenant_code: str = "",
 ) -> Dataset | None:
     with session_scope() as session:
@@ -72,6 +78,10 @@ def update_dataset(
             row.retrieval = retrieval
         if embedding_model is not None:
             row.embedding_model = embedding_model
+        if index_method is not None:
+            row.index_method = index_method
+        if chunk_config is not None:
+            row.chunk_config = chunk_config
         session.flush()
         return row
 

@@ -109,21 +109,27 @@ async def retrieve_hits(
     query_vector: list[float],
     top_k: int,
     score_threshold: float | None,
+    mode: str = "vector",
     coarse_top_k: int = 0,
     hybrid: bool = False,
     lexical_top_k: int = 0,
     rrf_k: int = 60,
     rerank: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """粗召回 →（可选）混合精召回 →（可选）重排序 → 取 top_k。
+    """按 mode 召回 →（可选）重排序 → 取 top_k。
 
+    mode：`vector`（向量）/ `fulltext`（仅关键词）/ `hybrid`（向量 + 关键词 RRF）。
+    `hybrid=True`（旧节点字段）等价于 mode=hybrid，保留向后兼容。
     重排序失败只记日志并回退，不阻断检索。
     """
     recall_k = coarse_top_k if coarse_top_k > 0 else top_k
-    candidates = vector_hits(passages, query_vector, score_threshold)[:recall_k]
-    if hybrid:
-        lexical = lexical_hits(passages, query)[: lexical_top_k if lexical_top_k > 0 else recall_k]
-        candidates = rrf_merge(candidates, lexical, k=rrf_k)
+    if mode == "fulltext":
+        candidates = lexical_hits(passages, query)[:recall_k]
+    else:
+        candidates = vector_hits(passages, query_vector, score_threshold)[:recall_k]
+        if mode == "hybrid" or hybrid:
+            lexical = lexical_hits(passages, query)[: lexical_top_k if lexical_top_k > 0 else recall_k]
+            candidates = rrf_merge(candidates, lexical, k=rrf_k)
     if rerank and candidates:
         top_n = int(rerank.get("top_k") or 0) or top_k
         try:
@@ -140,12 +146,40 @@ async def retrieve_hits(
     return candidates[:top_k]
 
 
-def _pick(node_value: Any, global_value: Any) -> Any:
-    return global_value if node_value is None else node_value
+def resolve_retrieval(tenant_code: str, dataset_ids: list[str]) -> dict[str, Any]:
+    """读取引用知识库的检索配置（多知识库取首个）；economy 知识库强制全文检索。"""
+    if not dataset_ids:
+        return {}
+    from agent_platform.knowledge.datasets import get_dataset
+
+    dataset = get_dataset(dataset_ids[0], tenant_code)
+    if dataset is None:
+        return {}
+    config = dict(dataset.retrieval or {})
+    mode = config.get("mode")
+    if dataset.index_method == "economy":
+        mode = "fulltext"
+    return {
+        "mode": mode if mode in ("vector", "fulltext", "hybrid") else None,
+        "rerank": config.get("rerank"),
+        "coarse_top_k": config.get("coarse_top_k"),
+    }
 
 
-def _rerank_options(settings: Settings, node_flag: bool | None) -> dict[str, Any] | None:
-    enabled = settings.rerank_enabled if node_flag is None else bool(node_flag)
+def _resolve_mode(
+    *, node_mode: str | None, node_hybrid: bool | None, dataset_mode: str | None, global_hybrid: bool
+) -> str:
+    """mode 优先级：节点 mode > 节点 hybrid > 知识库配置 > 全局开关。"""
+    if node_mode in ("vector", "fulltext", "hybrid"):
+        return node_mode
+    if node_hybrid is not None:
+        return "hybrid" if node_hybrid else "vector"
+    if dataset_mode in ("vector", "fulltext", "hybrid"):
+        return dataset_mode
+    return "hybrid" if global_hybrid else "vector"
+
+
+def _rerank_options(settings: Settings, enabled: bool) -> dict[str, Any] | None:
     if not enabled or not settings.rerank_base_url:
         return None
     return {
@@ -169,20 +203,34 @@ def build_builtin_searcher(settings: Settings):
         coarse_top_k: int | None = None,
         hybrid: bool | None = None,
         rerank: bool | None = None,
+        mode: str | None = None,
     ) -> list[dict[str, Any]]:
+        resolved = resolve_retrieval(tenant_code, dataset_ids)
+        effective_mode = _resolve_mode(
+            node_mode=mode,
+            node_hybrid=hybrid,
+            dataset_mode=resolved.get("mode"),
+            global_hybrid=settings.retrieval_hybrid_enabled,
+        )
+        effective_coarse = coarse_top_k if coarse_top_k is not None else resolved.get("coarse_top_k")
+        dataset_rerank = resolved.get("rerank")
+        rerank_enabled = rerank if rerank is not None else (
+            dataset_rerank if dataset_rerank is not None else settings.rerank_enabled
+        )
         passages = build_passages(tenant_code, dataset_ids)
-        query_vector = await embedder.encode(query)
+        # 全文检索不需要查询向量（也避免多余的 embedding 调用）
+        query_vector = [] if effective_mode == "fulltext" else await embedder.encode(query)
         return await retrieve_hits(
             passages=passages,
             query=query,
             query_vector=query_vector,
             top_k=top_k,
             score_threshold=score_threshold,
-            coarse_top_k=int(_pick(coarse_top_k, settings.retrieval_coarse_top_k) or 0),
-            hybrid=bool(_pick(hybrid, settings.retrieval_hybrid_enabled)),
+            mode=effective_mode,
+            coarse_top_k=int(effective_coarse or 0),
             lexical_top_k=settings.retrieval_lexical_top_k,
             rrf_k=settings.retrieval_rrf_k,
-            rerank=_rerank_options(settings, rerank),
+            rerank=_rerank_options(settings, bool(rerank_enabled)),
         )
 
     return search

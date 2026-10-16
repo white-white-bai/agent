@@ -226,6 +226,8 @@ class DatasetUpsertRequest(BaseModel):
     name: str = ""
     description: str = ""
     embedding_model: str = ""
+    index_method: str = "high_quality"
+    chunk_config: dict[str, Any] = Field(default_factory=dict)
     retrieval: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -233,6 +235,7 @@ class DocumentTextRequest(BaseModel):
     tenant_code: str = ""
     name: str = ""
     content: str = ""
+    chunk_config: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

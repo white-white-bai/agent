@@ -264,3 +264,78 @@ def test_document_uuids_are_unique():
     second = _seed("t", "d1", "b", content, hash_embed(content))
     assert first.uuid != second.uuid
     assert uuid.UUID(first.uuid).hex == first.uuid
+
+
+# --------------------------------------------------------------------------- 索引方式 / 检索模式
+
+
+def test_resolve_retrieval_reads_dataset_and_forces_fulltext_for_economy():
+    from agent_platform.knowledge.datasets import create_dataset, update_dataset
+    from agent_platform.knowledge.vector_store import resolve_retrieval
+
+    dataset = create_dataset(tenant_code="t", name="kb", retrieval={"mode": "hybrid"})
+    assert resolve_retrieval("t", [dataset.uuid])["mode"] == "hybrid"
+
+    update_dataset(dataset.uuid, index_method="economy")
+    assert resolve_retrieval("t", [dataset.uuid])["mode"] == "fulltext"
+
+    assert resolve_retrieval("t", []) == {}
+    assert resolve_retrieval("t", ["missing"]) == {}
+
+
+@pytest.mark.asyncio
+async def test_economy_ingest_skips_embeddings_and_recalls_fulltext():
+    from agent_platform.knowledge.datasets import create_dataset
+    from agent_platform.knowledge.ingest import ingest_document
+
+    dataset = create_dataset(tenant_code="t", name="kb", index_method="economy", chunk_config={"max_chars": 50})
+    document = create_document(
+        tenant_code="t", dataset_id=dataset.uuid, name="d", content="苏超购票专题智能体上线", status="pending"
+    )
+    await ingest_document(document.uuid)
+
+    segments, total = list_segments(document.uuid)
+    assert total == 1 and segments[0].embedding == []
+
+    searcher = build_builtin_searcher(Settings(embedding_dim=256))
+    hits = await searcher(
+        tenant_code="t", query="苏超购票", dataset_ids=[dataset.uuid], top_k=5, score_threshold=None
+    )
+    assert [hit["document_name"] for hit in hits] == ["d"]
+
+
+@pytest.mark.asyncio
+async def test_fulltext_mode_recalls_by_keywords_only():
+    from agent_platform.knowledge.datasets import create_dataset
+    from agent_platform.knowledge.ingest import ingest_document
+
+    dataset = create_dataset(tenant_code="t", name="kb", retrieval={"mode": "fulltext"})
+    document = create_document(
+        tenant_code="t", dataset_id=dataset.uuid, name="kw", content="苏超购票专题", status="pending"
+    )
+    await ingest_document(document.uuid)
+
+    searcher = build_builtin_searcher(Settings(embedding_dim=256))
+    hits = await searcher(
+        tenant_code="t", query="苏超购票", dataset_ids=[dataset.uuid], top_k=5, score_threshold=None
+    )
+    assert [hit["document_name"] for hit in hits] == ["kw"]
+
+
+@pytest.mark.asyncio
+async def test_ingest_honours_document_chunk_config_override():
+    from agent_platform.knowledge.datasets import create_dataset
+    from agent_platform.knowledge.ingest import ingest_document
+
+    dataset = create_dataset(tenant_code="t", name="kb", chunk_config={"max_chars": 100})
+    document = create_document(
+        tenant_code="t",
+        dataset_id=dataset.uuid,
+        name="d",
+        content="甲" * 25,
+        status="pending",
+        chunk_config={"max_chars": 10},
+    )
+    await ingest_document(document.uuid)
+    _, total = list_segments(document.uuid)
+    assert total == 3

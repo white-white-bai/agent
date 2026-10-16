@@ -23,6 +23,7 @@ def create_document(
     char_count: int = 0,
     chunk_count: int = 0,
     status: str = "ready",
+    chunk_config: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
     created_by: str = "",
     uuid_value: str = "",
@@ -39,6 +40,7 @@ def create_document(
             char_count=char_count,
             chunk_count=chunk_count,
             status=status,
+            chunk_config=chunk_config or {},
             doc_metadata=metadata or {},
             created_by=created_by,
         )
@@ -87,6 +89,7 @@ def update_document(
     error: str | None = None,
     char_count: int | None = None,
     chunk_count: int | None = None,
+    chunk_config: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
     tenant_code: str = "",
 ) -> Document | None:
@@ -104,6 +107,8 @@ def update_document(
             row.char_count = char_count
         if chunk_count is not None:
             row.chunk_count = chunk_count
+        if chunk_config is not None:
+            row.chunk_config = chunk_config
         if metadata is not None:
             row.doc_metadata = metadata
         session.flush()

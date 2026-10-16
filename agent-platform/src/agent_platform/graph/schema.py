@@ -81,6 +81,8 @@ class KnowledgeConfig(BaseModel):
     coarse_top_k: int | None = None
     hybrid: bool | None = None
     rerank: bool | None = None
+    # 检索模式：None = 用知识库配置（其次全局）。vector/fulltext/hybrid
+    mode: Literal["vector", "fulltext", "hybrid"] | None = None
 
 
 class ConditionBranch(BaseModel):
