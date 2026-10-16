@@ -286,6 +286,17 @@
 - [x] 前端：`KnowledgeView` 重构为「知识库列表 + 文档表」两栏，新增 `components/knowledge/{DatasetPanel,DocumentTable,SegmentDrawer,HitTestDialog}.vue`；上传走 XHR 进度条（`client.uploadRequest`）；`pending` 文档轮询；图节点 `dataset_ids` 改用新 `dataset-select` 下拉并暴露 `coarse_top_k/hybrid/rerank`
 - [x] 测试：后端 `tests/{test_knowledge,test_retrieval,test_worker,test_admin_api}.py` 改配分段语义并新增知识库/文档/分段/召回测试，`pytest` 434 项 + `ruff` 通过；前端 `tests/{api,views,components,nodeMeta}.spec.js` 更新，`npm test` 186 项 + `npm run lint` + `npm run build` 通过
 
+**M-续批（2026-10-16）· 知识库创建向导 + 知识库级处理设置（对齐 Dify）**：分段/清洗/索引/检索设置落到知识库级并在入库与检索时生效。
+
+- [x] 分段与清洗：新增 `knowledge/chunking.py`（`normalize_config` / `preprocess_text`（折叠连续空白、删 URL 与邮箱）/ `split_text`（可配分隔符，泛化原 `chunk_text`）/ `split_qa`（**规则式**问答对切分，无问句标记回退通用）/ `chunk_document`）；`uploads.chunk_text` 改为薄封装
+- [x] 数据模型：`ap_dataset` 增 `index_method`（高质量/经济）与 `chunk_config`，`ap_document` 增 `chunk_config`（每文档覆盖）；`sql/ddl.sql` 同步，新增守卫迁移脚本 `sql/migrate_knowledge_config.sql`
+- [x] 入库按配置：`resolve_chunk_config`（**文档覆盖 > 知识库默认 > 全局** `AP_DOCUMENT_CHUNK_*`）；`ingest_document` 走 `chunk_document`，`index_method=economy` 时**不生成向量**（分段 embedding 为空）
+- [x] 检索模式：`retrieve_hits` 支持 `vector`/`fulltext`/`hybrid`；新增 `resolve_retrieval`（读知识库 `retrieval.mode`，economy 强制 fulltext）；`build_builtin_searcher` 优先级 **节点 > 知识库 > 全局**；`KnowledgeConfig` 增 `mode`
+- [x] 管理端 API：`DatasetUpsertRequest` 增 `index_method`/`chunk_config`；新增 **分段预览** `POST /admin/knowledge/preview`（不落库）；上传/文本入库支持每文档 `chunk_config`
+- [x] 前端：新增 `KnowledgeWizard`（三步：选数据源 → 分段与清洗含「预览块/预估块」→ 处理并完成）、`ChunkSettingsForm`、`ChunkPreview`；知识库编辑弹窗与上传弹窗支持分段/索引/检索设置与**每文档覆盖**
+- [x] 测试：后端 `pytest` 462 项 + `ruff` 通过（新增 `tests/test_chunking.py`，及 `test_knowledge`/`test_admin_api` 的知识库/预览/经济/全文/覆盖用例）；前端 `npm test` 192 项 + `lint` + `build` 通过
+- [x] 文档：`agent-platform/README.md`（分段/清洗、索引方式、预览接口、检索模式与优先级、迁移脚本）、`agent-platform-ui/README.md`
+
 **未纳入本批**：无（决策清单的 M1～M4 各项均已交付）。
 
 **环境备注**：本机 Python 3.11.1；依赖已 `pip install -e ".[dev]"`；测试用临时 SQLite（`conftest.py`），生产用 MySQL（`sql/ddl.sql` 人工执行）。
