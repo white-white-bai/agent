@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -22,6 +22,11 @@ const selected = ref(null)
 const ready = ref(false)
 const dirty = ref(false)
 const busy = ref(false)
+// 自动保存：编辑后防抖落库，避免改一处要点一次「保存草稿」
+const autoSaving = ref(false)
+const AUTO_SAVE_DELAY = 600
+let autoSaveTimer = null
+let revision = 0
 
 const versionDialog = ref(false)
 const versions = ref([])
@@ -80,7 +85,7 @@ async function insertPipelineTemplate() {
       return
     }
     loadIntoCanvas(template.definition)
-    dirty.value = true
+    markDirty()
     ElMessage.success('已插入「政务咨询分角色流水线」，保存草稿后即可运行')
   } catch (error) {
     ElMessage.error(error.message || '插入模板失败')
@@ -94,6 +99,7 @@ async function load() {
     const graph = await getGraph(appUuid)
     definition.value = (graph && graph.definition) || {}
     selected.value = null
+    clearAutoSave()
     dirty.value = false
     ready.value = true
     modelOptions.value = await loadModelOptions()
@@ -119,7 +125,50 @@ function currentDefinition() {
   })
 }
 
+function clearAutoSave() {
+  if (autoSaveTimer) {
+    clearTimeout(autoSaveTimer)
+    autoSaveTimer = null
+  }
+}
+
+function markDirty() {
+  revision += 1
+  dirty.value = true
+  if (!auth.can('graph:write')) {
+    return
+  }
+  clearAutoSave()
+  autoSaveTimer = setTimeout(autoSave, AUTO_SAVE_DELAY)
+}
+
+async function autoSave() {
+  autoSaveTimer = null
+  if (!dirty.value || autoSaving.value || !app.value) {
+    return
+  }
+  const current = revision
+  autoSaving.value = true
+  try {
+    const saved = await saveGraphDraft(appUuid, currentDefinition())
+    definition.value = (saved && saved.definition) || definition.value
+    if (revision === current) {
+      dirty.value = false
+    } else {
+      // 请求期间又有改动，安排下一轮
+      autoSaveTimer = setTimeout(autoSave, AUTO_SAVE_DELAY)
+    }
+  } catch (error) {
+    ElMessage.error(error.message || '自动保存失败')
+  } finally {
+    autoSaving.value = false
+  }
+}
+
+onBeforeUnmount(clearAutoSave)
+
 async function saveDraft() {
+  clearAutoSave()
   busy.value = true
   try {
     const saved = await saveGraphDraft(appUuid, currentDefinition())
@@ -143,6 +192,7 @@ async function publish() {
   }
   busy.value = true
   try {
+    clearAutoSave()
     await saveGraphDraft(appUuid, currentDefinition())
     const version = await publishGraph(appUuid, { note, created_by: auth.displayName })
     dirty.value = false
@@ -173,6 +223,7 @@ async function rollback(row) {
   try {
     const version = await rollbackGraph(appUuid, row.version)
     loadIntoCanvas(version && version.definition)
+    clearAutoSave()
     dirty.value = false
     versionDialog.value = false
     ElMessage.success(`已回滚到 v${row.version}`)
@@ -195,6 +246,7 @@ async function runImport() {
       : await importGraph(appUuid, { ...importForm.value })
     importWarnings.value = (result && result.warnings) || []
     loadIntoCanvas(result && result.definition)
+    clearAutoSave()
     dirty.value = false
     importDialog.value = false
     importFile.value = null
@@ -337,7 +389,8 @@ function onRemove(id) {
   <div v-loading="busy" class="editor">
     <div class="editor__bar">
       <span class="editor__title">{{ title }}</span>
-      <el-tag v-if="dirty" size="small" type="warning">未保存</el-tag>
+      <el-tag v-if="autoSaving" size="small" type="info">保存中…</el-tag>
+      <el-tag v-else-if="dirty" size="small" type="warning">未保存</el-tag>
       <span class="editor__spacer" />
       <el-button size="small" @click="fit">自适应</el-button>
       <el-button size="small" @click="openVersions">版本</el-button>
@@ -355,7 +408,7 @@ function onRemove(id) {
         </el-alert>
       </div>
       <div class="editor__canvas">
-        <GraphCanvas v-if="ready" ref="canvas" :definition="definition" @select="onSelect" @change="dirty = true" />
+        <GraphCanvas v-if="ready" ref="canvas" :definition="definition" @select="onSelect" @change="markDirty" />
       </div>
       <div class="editor__inspector">
         <NodeInspector

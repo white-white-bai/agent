@@ -181,6 +181,15 @@ describe('NodeInspector', () => {
     expect(payload.config.template).toBe('你好 {{ text }}')
   })
 
+  it('emits a plain config that can be structured-cloned downstream', () => {
+    const wrapper = mount(NodeInspector, { props: { node: { id: 'answer_1', type: 'answer', title: '回答', config: defaultConfig('answer') } } })
+    const templateInput = wrapper.findAllComponents({ name: 'ElInput' }).find((input) => input.props('modelValue') === '{{ text }}')
+    templateInput.vm.$emit('update:modelValue', '你好')
+    const payload = wrapper.emitted('update').at(-1)[0]
+    // 草稿是响应式代理，直接下发会让 GraphCanvas 的 structuredClone 抛 DataCloneError
+    expect(() => structuredClone(payload.config)).not.toThrow()
+  })
+
   it('emits remove with the node id', async () => {
     const wrapper = mount(NodeInspector, { props: { node: { id: 'llm_1', type: 'llm', title: '', config: {} } } })
     const removeButton = wrapper.findAll('button').find((button) => button.text().includes('删除节点'))

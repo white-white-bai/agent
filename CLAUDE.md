@@ -39,12 +39,17 @@ ruff 忽略 `B008`（FastAPI `Depends()` 默认值），`engine/code_sandbox.py`
 ```bash
 cd agent-platform-ui
 npm install --registry=https://registry.npmmirror.com
-npm run dev            # 5199，代理 /admin /v1 /api /healthz → AP_UI_PROXY_TARGET（默认 127.0.0.1:8900）
+npm run dev            # Vite 源码调试；5199，代理 /admin /v1 /api /healthz → AP_UI_PROXY_TARGET（默认 127.0.0.1:8900）
 npm run lint           # eslint .（flat config）
 npm test               # vitest run
 npx vitest run tests/mapper.spec.js        # 单文件
 npm run build
 ```
+
+全栈一键（在 `agent-platform/` 下，需 Docker）：`docker compose up -d --build`（api + worker + ui + mysql + langfuse）；
+只改了前端源码时 `docker compose up -d --build ui` 重建管理端；`docker compose stop ui` 腾出 5199 给 `npm run dev`。
+
+**`:5199` 谁在服务要看清**：compose 栈起来时，5199 是 `agent-platform-ui:dev` 容器里 nginx 托管的**打包产物**（页面加载 `/assets/index-*.js`），与 `npm run dev`（页面加载 `/src/main.js`）**互斥同端口**。此时改 `src/` 只是改源码，**必须 `docker compose up -d --build ui` 重建镜像才生效**，光刷新浏览器没用——排查「改了没效果」先看页面加载的是 `assets/index-*.js` 还是 `src/main.js`。
 
 ## 架构
 
@@ -90,7 +95,7 @@ npm run build
 
 - 后端测试用临时 SQLite（`tests/conftest.py` 的 autouse fixture 建表），不依赖 MySQL/Redis；LLM/MCP/检索都用 mock。生产才连 MySQL。新增涉及 DB 的测试请沿用 `seed_app` 等 fixture，不要自建引擎。
 - 前端只对纯逻辑模块做单测（`graph/mapper.js`、`graph/nodeMeta.js`、`api/client.js`、`router/guard.js`、`utils/chart.js`、`composables/useTable.js`），外加组件挂载与视图冒烟。`GraphCanvas.vue` / `GraphEditorView.vue` 依赖真实画布与路由参数，**刻意不做挂载测试**——可测逻辑都下沉到 `mapper.js`，改动图编辑器优先在那里加测试。
-- 前端老手坑：`structuredClone` 不接受 Vue 响应式代理，克隆前先 `toRaw`（见 `NodeInspector.vue` / `RowsEditor.vue`）。
+- 前端老手坑：`structuredClone` 不接受 Vue 响应式代理，克隆前先 `toRaw`（见 `NodeInspector.vue` / `RowsEditor.vue`）。**节点检查器下发的 `config` 必须是普通对象**——`NodeInspector.publish` 要在 `structuredClone(toRaw(...))` 后 emit，否则 `GraphCanvas.applyNode` 里的 `structuredClone` 抛 `DataCloneError`，节点改动静默失败（画布/草稿都不更新）。
 
 ## 工作流
 

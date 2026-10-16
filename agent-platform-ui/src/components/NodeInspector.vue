@@ -20,8 +20,10 @@ const draft = ref(null)
 const meta = computed(() => (props.node ? nodeMeta(props.node.type) : null))
 const fields = computed(() => (meta.value ? meta.value.fields : []))
 
+// 只在选中节点变化（id/type）时重置草稿；返回数组会让 Vue 在每次父级下发新 node 对象时都判定为变化，
+// 导致每次输入都重建草稿。用字符串 key 保证只有真正的切换才触发。
 watch(
-  () => [props.node && props.node.id, props.node && props.node.type],
+  () => `${(props.node && props.node.id) || ''}|${(props.node && props.node.type) || ''}`,
   () => {
     draft.value = props.node ? structuredClone(toRaw(props.node)) : null
   },
@@ -36,7 +38,10 @@ function publish() {
   if (!draft.value) {
     return
   }
-  emit('update', { id: draft.value.id, title: draft.value.title, config: draft.value.config })
+  // draft 是 ref 的响应式代理，直接下发 config 会让下游 structuredClone(patch.config) 抛 DataCloneError，
+  // 先 toRaw 再深拷贝成普通对象。
+  const config = structuredClone(toRaw(draft.value.config) || {})
+  emit('update', { id: draft.value.id, title: draft.value.title, config })
 }
 
 function setField(key, value) {

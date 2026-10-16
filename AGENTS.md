@@ -28,12 +28,20 @@ python -m agent_platform.importer app.yml -o graph.json   # Dify DSL → 图定�
 
 # 前端（在 agent-platform-ui/ 下）
 npm install --registry=https://registry.npmmirror.com   # 公司 nexus 不可达，必须显式指定源
-npm run dev        # 5199；浏览器用 http://localhost:5199（IPv6 ::1），127.0.0.1 连不上
+npm run dev        # Vite 源码调试；浏览器用 http://localhost:5199（IPv6 ::1），127.0.0.1 连不上
 npm test           # vitest run（约 15 秒）
 npm run lint       # eslint flat config
+npm run build      # 产物 dist/
+
+# 全栈一键（在 agent-platform/ 下；Docker，需本地 Docker Desktop 运行中）
+docker compose up -d --build        # api + worker + ui + mysql + langfuse
+docker compose up -d --build ui     # 只重建管理端（改了前端源码后必跑，否则 :5199 还是旧产物）
+docker compose stop ui              # 腾出 5199 给 npm run dev
+docker compose down                 # 停止（-v 连数据卷一起清）
 ```
 
 - **先起后端再起前端**：前端把 `/admin` `/v1` `/api` `/healthz` 代理到 `AP_UI_PROXY_TARGET`（默认 127.0.0.1:8900），顺序反了接口 502。
+- **`:5199` 谁在服务要看清**：compose 栈起来时，5199 是 `agent-platform-ui:dev` 容器里 nginx 托管的**打包产物**（页面加载 `/assets/index-*.js`），与 `npm run dev`（页面加载 `/src/main.js`）**互斥同端口**。此时改 `src/` 只是改源码，**必须 `docker compose up -d --build ui` 重建镜像才生效**，光刷新浏览器没用——排查「改了没效果」先看页面加载的是 `assets/index-*.js` 还是 `src/main.js`。
 - 不接外部依赖时把 `AP_DB_DSN` 改成 `sqlite+pysqlite:///./.run/agent_platform.db`，建表由启动时 `init_db()` 完成，`sql/ddl.sql` 无需手工执行。
 - Windows 下 `curl -d` 传非 ASCII 体会被控制台编码破坏：请求体写 UTF-8 文件用 `--data-binary @file`。
 
@@ -53,7 +61,7 @@ npm run lint       # eslint flat config
 
 - 后端：DB 相关测试沿用 `tests/conftest.py` 的 autouse 建表 fixture 和 `seed_app` 等 fixture，**不要自建引擎**；LLM/MCP/检索一律 mock。
 - 前端：只测纯逻辑（`graph/mapper.js`、`graph/nodeMeta.js`、`api/client.js`、`router/guard.js`、`utils/chart.js`、`composables/useTable.js`）+ 组件挂载冒烟；`GraphCanvas.vue` / `GraphEditorView.vue` **刻意不做挂载测试**，改动图编辑器时把可测逻辑下沉到 `mapper.js` 再加测试。
-- 前端已知坑：`structuredClone` 不接受 Vue 响应式代理，克隆前先 `toRaw`（见 `NodeInspector.vue` / `RowsEditor.vue`）。
+- 前端已知坑：`structuredClone` 不接受 Vue 响应式代理，克隆前先 `toRaw`（见 `NodeInspector.vue` / `RowsEditor.vue`）。**节点检查器下发的 `config` 必须是普通对象**——`NodeInspector.publish` 要在 `structuredClone(toRaw(...))` 后 emit，否则 `GraphCanvas.applyNode` 里的 `structuredClone` 抛 `DataCloneError`，节点改动静默失败（画布/草稿都不更新）。
 
 ## 工作流
 

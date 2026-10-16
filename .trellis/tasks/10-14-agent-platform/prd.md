@@ -264,6 +264,16 @@
 - [x] 冲突：同 `app_id` 在用中，或软删除记录属其他租户时抛 `AppIdConflictError`，`POST /admin/apps` 映射为 409
 - [x] 测试：`tests/test_admin_api.py` 增 3 项（在用冲突 409 / 删除后复活且沿用 uuid 并回到列表 / 跨租户拒绝 409）
 
+**M3 续批（2026-10-16）· 图编辑器节点内容自动保存与编辑修复**：画板改节点内容不生效、且需手动保存，已修复。
+
+- [x] 根因：`NodeInspector.publish` 直接下发 `draft.value.config`（Vue 响应式代理），`GraphCanvas.applyNode` 里的 `structuredClone(patch.config)` 抛 `DataCloneError`，
+  每次输入在写回画布前即中断——节点数据不落画布、`dirty` 不置位、草稿不保存
+- [x] 修复：`publish` 改下发 `structuredClone(toRaw(draft.value.config) || {})` 的普通对象；`NodeInspector` 重建草稿的 watcher 由「返回数组的 getter」改为 `id|type` 字符串 key，
+  避免父级每次下发新 node 对象都判定为变化而重建草稿（原实现每次输入都重克隆）
+- [x] 自动保存：`GraphEditorView` 用 `markDirty()` 收口脏标记（画布 `@change`、增删节点、插入模板），600ms 防抖调用 `saveGraphDraft`；请求期间的新改动在完成后接续保存；
+  手动保存 / 发布 / 导入 / 回滚 / 组件卸载时清掉定时器；顶栏显示「保存中…」/「未保存」
+- [x] 测试：`tests/components.spec.js` 增 1 项回归（下发的 config 必须能被 `structuredClone`，原实现抛 `DataCloneError`）；`npm test` 173 项全绿，`npm run lint` 通过
+
 **未纳入本批**：无（决策清单的 M1～M4 各项均已交付）。
 
 **环境备注**：本机 Python 3.11.1；依赖已 `pip install -e ".[dev]"`；测试用临时 SQLite（`conftest.py`），生产用 MySQL（`sql/ddl.sql` 人工执行）。
