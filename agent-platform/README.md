@@ -142,8 +142,21 @@ python -m agent_platform.importer app.yml --llm-provider deepseek --retriever li
 - **少样本**：智能体可引用 `ap_prompt_template`（管理端「提示词模板」页维护）的 `examples`，渲染进 system 提示词。
 - **内置预设**：启动时幂等播种 4 类角色智能体（`gov.intent` / `gov.retrieval` / `gov.generate` / `gov.compliance`）、
   2 个少样本模板与 3 个工具示例；已存在同 code / name 的不覆盖。
-- **图模板**：`GET /admin/graph/templates` 返回内置「政务咨询分角色流水线」（意图识别 → 知识检索 → 内容生成 → 合规质检 → 答复），
-  编辑器工具栏「插入流水线模板」一键载入。
+- **图模板**：`GET /admin/graph/templates` 返回内置「政务咨询分角色流水线」，
+  编辑器工具栏「插入流水线模板」一键载入：
+
+```
+start → 意图识别 → 知识检索 → 内容生成 → 合规质检 → 条件「合规判定」
+                                                            ├─ pass   → 答复 → end
+                                                            └─ revise → 重写计数(+1) → 回到「内容生成」
+```
+
+  - 判定表达式（`condition` 节点）认合规智能体输出的「判定：不通过」一行，也兼容 JSON 里的 `"pass": false`：
+    两个变量缺省都不报错（首轮无 `review` / `retry`），判定通过则**不改写**。
+  - **步数保护**：`revise` 分支带 `(retry | default(0) | int) < 2` 上限，计数节点每次 `+1`；
+    连续打回 2 轮后自动落到 `pass` 分支输出当前稿，不会死循环（LangGraph 默认 `recursion_limit=25` 是更外层兜底）。
+  - 重写时 `generate4` 的提示词里会带上 `review`（合规意见），提示词用 `{% if (review | default('')) %}` 判断，
+    首轮无该变量也不报错。
 
 ## 工具声明与调用治理
 

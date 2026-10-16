@@ -79,10 +79,11 @@ BUILTIN_AGENTS: list[dict[str, Any]] = [
         "code": "gov.compliance",
         "label": "合规质检",
         "role": "compliance",
-        "mode": "reflection",
+        # 判定要一次成型：reflection 会自我改写判定，反而让结果不稳定
+        "mode": "react",
         "system_prompt": (
             "你是合规质检智能体：检查答复是否存在越权承诺、虚假政策、敏感表述或缺失依据。"
-            '输出 JSON：{"pass": true, "reason": "...", "suggestion": "..."}。'
+            "先给出一句理由，最后单独一行输出判定，格式必须是「判定：通过」或「判定：不通过」，不要输出其它内容。"
         ),
         "cot": True,
         "reflection_rounds": 1,
