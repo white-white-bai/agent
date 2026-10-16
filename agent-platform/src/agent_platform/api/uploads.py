@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import io
-import itertools
 import re
 from html.parser import HTMLParser
 from pathlib import PurePath
@@ -167,22 +166,7 @@ def _extract_xls(raw: bytes) -> str:
 
 
 def chunk_text(text: str, size: int, overlap: int = 0) -> list[str]:
-    """按空行切段，段落超长时再按 size 硬切；空白块丢弃；overlap>0 时相邻块保留重叠。"""
-    size = max(size, 1)
-    pieces: list[str] = []
-    for paragraph in (part.strip() for part in text.split("\n\n")):
-        if not paragraph:
-            continue
-        pieces.extend(paragraph[i : i + size] for i in range(0, len(paragraph), size))
-    merged: list[str] = []
-    for piece in pieces:
-        if merged and len(merged[-1]) + len(piece) + 2 <= size:
-            merged[-1] = f"{merged[-1]}\n\n{piece}"
-        else:
-            merged.append(piece)
-    if overlap <= 0 or len(merged) < 2:
-        return merged
-    overlapped = [merged[0]]
-    for previous, current in itertools.pairwise(merged):
-        overlapped.append(f"{previous[-overlap:]}\n\n{current}")
-    return overlapped
+    """按空行切段、超长硬切、可选重叠。分段实现已迁至 knowledge/chunking.split_text。"""
+    from agent_platform.knowledge.chunking import split_text
+
+    return split_text(text, separator="\n\n", max_chars=size, overlap_chars=overlap)
