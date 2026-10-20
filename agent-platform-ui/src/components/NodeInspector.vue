@@ -14,6 +14,8 @@ const props = defineProps({
   agentOptions: { type: Array, default: () => [] },
   // 可用知识库：[{ value, label }]，来自 /admin/datasets
   datasetOptions: { type: Array, default: () => [] },
+  // 可作为子图引用的应用：[{ value, label }]，来自 /admin/graphs
+  graphOptions: { type: Array, default: () => [] },
 })
 const emit = defineEmits(['update', 'remove', 'run'])
 
@@ -126,6 +128,22 @@ function setTitle(value) {
           >
             <el-option
               v-for="option in modelOptions"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
+          </el-select>
+          <el-select
+            v-else-if="field.kind === 'graph-select'"
+            :model-value="fieldValue(field.key)"
+            class="inspector__select"
+            clearable
+            filterable
+            placeholder="选择子图应用"
+            @update:model-value="(value) => setField(field.key, value || '')"
+          >
+            <el-option
+              v-for="option in graphOptions"
               :key="option.value"
               :label="option.label"
               :value="option.value"

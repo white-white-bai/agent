@@ -1,4 +1,4 @@
-"""异步任务处理器：知识入库 / 工作流批处理 / 报告生成。"""
+"""异步任务处理器：知识入库 / 工作流批处理 / 报告生成 / 用户记忆抽取。"""
 from __future__ import annotations
 
 import uuid
@@ -13,6 +13,7 @@ from agent_platform.domain.models import Conversation, Message
 from agent_platform.engine.factory import build_engine_context
 from agent_platform.engine.runtime import run_graph
 from agent_platform.knowledge.ingest import ingest_document
+from agent_platform.memory.extract import extract_user_memory
 
 
 async def knowledge_ingest(payload: dict[str, Any]) -> dict[str, Any]:
@@ -60,10 +61,16 @@ async def report_generate(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+async def user_memory_extract(payload: dict[str, Any]) -> dict[str, Any]:
+    """从会话增量抽取用户级长期记忆（水位线幂等）。"""
+    return await extract_user_memory(get_settings(), **payload)
+
+
 HANDLERS = {
     "knowledge_ingest": knowledge_ingest,
     "graph_batch_run": graph_batch_run,
     "report_generate": report_generate,
+    "user_memory_extract": user_memory_extract,
 }
 
 

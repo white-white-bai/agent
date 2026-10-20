@@ -64,6 +64,14 @@ def _seed_agent(code: str, **fields):
     return services.create_agent(tenant_code="t", code=code, **fields)
 
 
+def test_agent_modes_include_autonomous():
+    from agent_platform.engine.agents.modes import MODES
+    from agent_platform.graph.schema import AGENT_MODES
+
+    assert "autonomous" in AGENT_MODES
+    assert "autonomous" in MODES
+
+
 # --------------------------------------------------------------------------- 提示词
 
 
@@ -335,3 +343,26 @@ async def test_build_agent_invoker_rejects_unknown_agent():
     invoker = build_agent_invoker(Settings())
     with pytest.raises(ValueError, match="未找到智能体定义"):
         await invoker(AgentConfig(agent="ghost"), {}, EngineContext(llm=ScriptedLLM(["x"])), "t")
+
+
+@pytest.mark.asyncio
+async def test_build_agent_invoker_runs_autonomous_mode():
+    _seed_agent(
+        "local.auto",
+        mode="autonomous",
+        system_prompt="系统人设",
+        max_steps=2,
+        reflection_rounds=0,
+    )
+    invoker = build_agent_invoker(Settings())
+    llm = ScriptedLLM(["自主答复"])
+    ctx = EngineContext(llm=llm)
+
+    result = await invoker(AgentConfig(agent="local.auto", query="{{ query }}"), {"query": "问题"}, ctx, "t")
+
+    assert result["answer"] == "自主答复"
+    assert result["mode"] == "autonomous"
+    assert result["steps"] == []
+    assert result["reflection"] == []
+    # autonomous 走 message 接口，且不会把旧 5 参数路径混在一起
+    assert "messages" in llm.calls[0]

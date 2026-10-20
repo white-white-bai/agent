@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import functools
 import logging
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -16,9 +17,11 @@ from agent_platform.core.db import session_scope
 from agent_platform.domain.models import McpServer, Tool
 from agent_platform.engine.context import ToolInvoker
 from agent_platform.engine.expr import evaluate
-from agent_platform.graph.schema import ToolConfig
+from agent_platform.graph.schema import ToolConfig, ToolRef
+from agent_platform.tools.discovery import discover_server_tools
 from agent_platform.tools.mcp_client import McpHttpClient
 from agent_platform.tools.policy import call_tool_governed
+from agent_platform.tools.schema import from_mcp_tool, safe_function_name, to_openai_tool
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +88,11 @@ async def _invoke(tool_spec: dict[str, Any], server_spec: dict[str, Any], name: 
     return await client.call_tool(name, args)
 
 
-def _policy(settings: Settings, tool_spec: dict[str, Any] | None) -> dict[str, Any]:
+def _policy(
+    settings: Settings,
+    tool_spec: dict[str, Any] | None,
+    params: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """合并全局默认与工具级覆盖，得到 call_tool_governed 的参数。"""
     spec = tool_spec or {}
     attempts = spec.get("retry_attempts")
@@ -93,8 +100,9 @@ def _policy(settings: Settings, tool_spec: dict[str, Any] | None) -> dict[str, A
     fallback = dict(spec.get("fallback") or {})
     if not fallback.get("enabled") and settings.tool_fallback_enabled:
         fallback = {"enabled": True, "mode": fallback.get("mode") or "empty", "value": fallback.get("value")}
+    declared_params = params if params is not None else (spec.get("params") or [])
     return {
-        "params": spec.get("params") or [],
+        "params": declared_params,
         "validate": settings.tool_validate,
         "attempts": settings.tool_retry_attempts if attempts is None else int(attempts),
         "backoff": settings.tool_retry_backoff_seconds if backoff is None else float(backoff),
@@ -121,13 +129,19 @@ async def _dispatch(
 
 
 async def call_declared_tool(
-    settings: Settings, name: str, args: dict[str, Any], *, server: str = "", tenant_code: str = ""
+    settings: Settings,
+    name: str,
+    args: dict[str, Any],
+    *,
+    server: str = "",
+    tenant_code: str = "",
+    params: list[dict[str, Any]] | None = None,
 ) -> Any:
     """按声明调用一次工具：参数校验 → 瞬时错误重试 → 失败兜底。"""
     tool_spec = _tool_spec(name, tenant_code)
     server_name = server or (tool_spec or {}).get("server") or ""
     call = functools.partial(_dispatch, settings, tool_spec or {}, server_name, {}, name, args, tenant_code)
-    return await call_tool_governed(name=name, args=args, call=call, **_policy(settings, tool_spec))
+    return await call_tool_governed(name=name, args=args, call=call, **_policy(settings, tool_spec, params))
 
 
 def build_tool_invoker(settings: Settings, servers: dict[str, str] | None = None) -> ToolInvoker:
@@ -163,3 +177,88 @@ def build_tool_caller(settings: Settings):
         return await call_declared_tool(settings, name, args, server=server, tenant_code=tenant_code)
 
     return call
+
+
+@dataclass
+class ResolvedTool:
+    """运行时解析出的工具：原始引用 + 用于本地校验的参数定义。"""
+
+    ref: ToolRef
+    params: list[dict[str, Any]] = field(default_factory=list)
+
+
+class ToolBox:
+    """给 autonomous 模式用的工具池：schema 解析、MCP 发现、受治理调用。"""
+
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+
+    async def schemas(
+        self, refs: list[ToolRef], tenant_code: str = ""
+    ) -> tuple[list[dict[str, Any]], dict[str, ResolvedTool]]:
+        schemas: list[dict[str, Any]] = []
+        mapping: dict[str, ResolvedTool] = {}
+        used: set[str] = set()
+
+        def add(ref: ToolRef, description: str, params: list[dict[str, Any]], tool: dict[str, Any] | None = None) -> None:
+            safe = safe_function_name(ref.name)
+            base = safe
+            index = 2
+            while safe in used:
+                safe = f"{base}_{index}"
+                index += 1
+            used.add(safe)
+            if tool is None:
+                tool = to_openai_tool(ref.name, description, params)
+            else:
+                tool = dict(tool)
+                tool["function"] = dict(tool["function"])
+                tool["function"]["name"] = safe
+            schemas.append(tool)
+            mapping[safe] = ResolvedTool(ref=ref, params=list(params or []))
+
+        for ref in refs or []:
+            if ref.discover:
+                if not self.settings.tool_discovery_enabled:
+                    logger.warning("工具发现未启用，跳过 server=%s", ref.server or "(未指定)")
+                    continue
+                if not ref.server:
+                    logger.warning("工具发现缺少 server：%s", ref.name or "(未指定)")
+                    continue
+                for item in await discover_server_tools(self.settings, ref.server, tenant_code):
+                    discovered_ref = ToolRef(name=item["name"], server=item.get("server") or ref.server)
+                    tool, params = from_mcp_tool(item)
+                    add(discovered_ref, str(item.get("description") or discovered_ref.name), params, tool)
+                continue
+
+            spec = _tool_spec(ref.name, tenant_code)
+            if spec is not None:
+                add(ref, str(spec.get("label") or ref.name), list(spec.get("params") or []))
+                continue
+
+            if ref.server and self.settings.tool_discovery_enabled:
+                discovered = await discover_server_tools(self.settings, ref.server, tenant_code)
+                found = next((item for item in discovered if item["name"] == ref.name), None)
+                if found is not None:
+                    tool, params = from_mcp_tool(found)
+                    add(ref, str(found.get("description") or ref.name), params, tool)
+                    continue
+
+            # 未声明且未发现：保留宽松 schema，让模型仍可尝试调用（由服务端校验参数）。
+            add(ref, ref.name or "tool", [])
+
+        return schemas, mapping
+
+    async def call(self, binding: ResolvedTool, args: dict[str, Any], tenant_code: str = "") -> Any:
+        return await call_declared_tool(
+            self.settings,
+            binding.ref.name,
+            args,
+            server=binding.ref.server,
+            tenant_code=tenant_code,
+            params=binding.params,
+        )
+
+
+def build_toolbox(settings: Settings) -> ToolBox:
+    return ToolBox(settings)

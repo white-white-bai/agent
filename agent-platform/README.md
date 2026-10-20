@@ -56,9 +56,14 @@ agent-platform/
   （Dify DSL 导入，见下；运行态只跑已发布版本）。
 - 图运行（编排调试，权限点 `graph:write`）：`POST /apps/{uuid}/graph/run-node`
   （body `{node_id, definition?, inputs}`，单节点执行，返回该节点输出 / route）与
-  `POST /apps/{uuid}/graph/run`（body `{definition?, inputs}`，SSE 流式跑整张图，事件
-  `node_start` / `token` / `node_end` / `final` / `error`）。两者都以传入的 `definition` 为准，
+  `POST /apps/{uuid}/graph/run`（body `{definition?, inputs, thread_id?}`，SSE 流式跑整张图，事件
+  `run_started` / `node_start` / `token` / `node_end` / `interrupt` / `final` / `error`）。两者都以传入的 `definition` 为准，
   缺省取当前草稿，**不写会话/消息**，也不影响对外 `/v1` 契约。
+- HITL 运行记录：`GET /runs`、`GET /runs/{thread_id}`（返回 `values/next/interrupts`）、
+  `POST /runs/{thread_id}/resume`（body `{interrupt_id?, action, payload?}`，SSE 续跑）；权限点 `graph:read/graph:write`。
+- 子图选项：`GET /graphs` 返回可引用的应用（`app_uuid/app_name/version/status`）与内置模板，供图编辑器选择。
+- 用户级长期记忆：`GET /user-memories`、`GET /user-memories/users`、`POST|PUT|DELETE /user-memories*`、
+  `POST /user-memories/recall`、`POST /user-memories/purge`、`GET /memory/config`；权限点 `memory:read/memory:write`。
 - 配置：`/sensitive-words`、`/mcp-servers`、`/datasets`（知识库，含文档/分段，见下）、`/retrieval/config`（检索流水线只读回显）。
 - 智能体 / 工具 / 提示词：`GET|POST|PUT|DELETE /agents`、`/tools`（含 `POST /tools/{uuid}/test` 试调）、`/prompts`；
   图模板 `GET /graph/templates`、`GET /graph/templates/{key}`（见下）。
@@ -115,7 +120,7 @@ python -m agent_platform.importer app.yml --llm-provider deepseek --retriever li
 - **list-operator**：`variable` + `operation`（first / last / at / limit / filter / sort / size）映射；不识别的操作提示并退化为 `first`。
 - **LLM context**：Dify 节点勾选 `context` 时，提示词里的 `{{#context#}}` 会被就地展开成上下文变量；若提示词未引用 `{{#context#}}`，则落到节点的 `context` 字段（运行时拼进提示词）。
 
-## 多智能体编排（Agent 节点 + 7 种工作模式）
+## 多智能体编排（Agent 节点 + 8 种工作模式）
 
 引擎新增 `agent` 节点，引用 `ap_agent` 里的智能体定义（管理端「智能体」页维护）：
 
@@ -123,20 +128,55 @@ python -m agent_platform.importer app.yml --llm-provider deepseek --retriever li
 {"id": "intent2", "type": "agent", "config": {"agent": "gov.intent", "query": "{{ query }}", "output_var": "intent"}}
 ```
 
-`variables[output_var]` 存最终答复字符串；`variables[node_id]` 存结构化结果（`answer` / `reasoning` / `steps` / `sources` / `mode`），
+`variables[output_var]` 存最终答复字符串；`variables[node_id]` 存结构化结果（`answer` / `reasoning` / `steps` / `sources` / `reflection` / `mode`），
 `supervisor` 模式的 `route` 会写进 `state.route`，配合带句柄的出边做动态路由。
 
-**7 种工作模式**（智能体定义里选，或节点上 `mode` 覆盖）：
+**8 种工作模式**（智能体定义里选，或节点上 `mode` 覆盖）：
 
 | 模式 | 行为 |
 | --- | --- |
 | `react` | Thought → Action（工具）→ Observation 循环；无工具时退化为带 CoT 的一次推理 |
-| `plan_execute` | 先出 JSON 计划，再逐步执行（可调工具），最后汇总 |
+| `autonomous` | 原生 function calling：消息栈 + 多轮 `tool_calls` → `ToolMessage` 回灌 + 失败重规划 + 短期记忆；见下 |
+| `plan_execute` | 先出 JSON 计划，再逐步执行，最后汇总 |
 | `reflection` | 生成 → 自我审查 → 修订，迭代 `reflection_rounds` 次 |
 | `supervisor` | 路由模型每轮挑一个成员执行，直到 finish；终选写 `state.route` |
 | `pipeline` | 按 `pipeline` 顺序依次执行，上游结果作为下游输入 |
 | `agent_as_tool` | 把子智能体暴露为 `agent:<code>` 工具，主智能体通过 Action 委派（递归深度上限 3） |
 | `deep_search` | 查询改写 → 多轮检索去重（`ctx.retriever`）→ 基于资料作答并标注引用 |
+
+### autonomous 模式
+
+`autonomous` 是显式开启的模式：现有内置智能体与图模板仍用 `react` 等旧模式，不选它时行为与之前一致。
+
+- **消息栈**：system（+ 历史摘要）→ `history` 的 user/assistant 消息 → 本轮 query；工具结果以 `ToolMessage`
+  （`tool_call_id` 对应）回灌，不再把观察拼成一段字符串。
+- **工具循环**：最多 `max_steps` 轮；模型返回 `tool_calls` 时逐个执行，工具异常/未知工具转成观察继续；
+  连续 2 次失败注入重规划提示，同一工具+同一参数重复 3 次提前收口，轮数耗尽时禁用工具强制给出最终答复。
+- **反思**：有工具调用且 `reflection_rounds > 0` 时，对最终稿做 critique/revise；`reflection_rounds=0` 可关闭。
+- **短期记忆**：自动消费图输入里的 `history`（`AP_HISTORY_WINDOW`）与 `summary`（`AP_HISTORY_SUMMARY_ENABLED`）；
+  两个开关默认关闭，关闭时不会凭空出现历史消息。
+- **降级**：模型/网关不支持 `tools` 时，首次调用失败即回退到 `react` 的文本 `Action:` 协议；模型忽略
+  `tools` 但输出了 `Action:` 文本时也会就地执行，保证兼容性。
+- **流式**：自主循环的中间轮（判断、工具参数、反思）不会作为 token 下发；只有最终答复轮 flush，
+  对外 SSE 仍是 `message` / `message_end`，契约不变。
+- **配额**：`AP_AGENT_TOOL_RESULT_MAX_CHARS`（默认 4000）限制单条工具结果回灌长度；`AP_LLM_TIMEOUT_SECONDS`
+  （默认 0 = endpoint 默认）与 `AP_LLM_MAX_RETRIES` 控制工具循环里的模型超时/重试。
+
+### 工具池与 MCP 运行时发现
+
+`AgentConfig.tools` / `ap_agent.tools` 里的 `ToolRef` 支持 `discover`：
+
+```json
+{"tools": [{"name": "weather.lookup", "server": "weather-mcp", "discover": true}]}
+```
+
+- `discover=true` 时，从该 `server` 的 MCP `tools/list` 拉取工具（`inputSchema` 直接作为 function schema），
+  与 `ap_tool` 声明的工具一起注入模型；发现结果只缓存、不自动落库。
+- 开关 `AP_TOOL_DISCOVERY_ENABLED`（默认 `false`）；关闭时只使用 `ap_tool` / `AgentConfig.tools` 声明，
+  且不会发起 `tools/list` 请求。TTL 由 `AP_TOOL_DISCOVERY_TTL_SECONDS` 控制，单次最多
+  `AP_TOOL_DISCOVERY_MAX_TOOLS` 个工具。
+- 未声明也未发现的工具仍保留宽松 schema，调用时走原有「服务 + 工具名」治理链路；发现失败只记 warning。
+- 点号工具名（如 `gov.business.query`）会转成 OpenAI 兼容的安全函数名（`gov_business_query`），运行时再映射回原名。
 
 - **CoT**：智能体 `cot=true` 时注入拆解脚手架，回复里的 `<reasoning>` 段抽到 `reasoning`，正文剥标签入 `answer`。
 - **少样本**：智能体可引用 `ap_prompt_template`（管理端「提示词模板」页维护）的 `examples`，渲染进 system 提示词。
@@ -278,6 +318,9 @@ mysql -h host -P 3306 -u user -p agent_platform < sql/ddl.sql                   
 mysql -h host -P 3306 -u user -p agent_platform < sql/migrate_history_summary.sql # 老库补记忆摘要列（幂等）
 mysql -h host -P 3306 -u user -p agent_platform < sql/migrate_knowledge_segments.sql # 老库把「文档即分段」迁成知识库两层模型（幂等）
 mysql -h host -P 3306 -u user -p agent_platform < sql/migrate_knowledge_config.sql   # 老库补知识库级 index_method/chunk_config 列（幂等）
+mysql -h host -P 3306 -u user -p agent_platform < sql/migrate_checkpoint_hitl.sql  # 老库补 checkpoint metadata_type/task_path/索引（幂等）
+mysql -h host -P 3306 -u user -p agent_platform < sql/migrate_user_memory.sql     # 老库新增用户长期记忆表（幂等）
+mysql -h host -P 3306 -u user -p agent_platform < sql/migrate_runs.sql            # 老库新增运行记录表（幂等）
 mysql -h host -P 3306 -u user -p agent_platform < sql/migrate_legacy_app.sql      # 存量 ai_monitor_app 导入
 ```
 
@@ -289,7 +332,8 @@ mysql -h host -P 3306 -u user -p agent_platform < sql/migrate_legacy_app.sql    
 python -m agent_platform.worker.main
 ```
 
-任务类型：`knowledge_ingest`（知识入库）、`graph_batch_run`（工作流批处理）、`report_generate`（报告汇总）。
+任务类型：`knowledge_ingest`（知识入库）、`graph_batch_run`（工作流批处理）、`report_generate`（报告汇总）、
+`user_memory_extract`（用户长期记忆抽取）。
 队列走 Redis（`AP_REDIS_URL`），队列键 `ap:jobs`；Redis 不可用时降级为进程内队列。
 
 ## 护栏（先上不启用）
@@ -309,6 +353,56 @@ python -m agent_platform.worker.main
 生成用 `AP_HISTORY_SUMMARY_PROVIDER` / `AP_HISTORY_SUMMARY_MODEL`，temperature 取 0.2。
 
 老库需执行 `sql/migrate_history_summary.sql` 补列（幂等），新建库直接用 `sql/ddl.sql`。
+
+### 用户级长期记忆（默认关闭）
+
+`AP_USER_MEMORY_ENABLED` 是总闸；`AP_USER_MEMORY_WRITE_ENABLED` 控制自动抽取，`AP_USER_MEMORY_RECALL_ENABLED`
+控制召回注入。按 **租户 + 应用 + 用户** 隔离（`AP_USER_MEMORY_SCOPE=app`，设为 `tenant` 时租户内跨应用共享）。
+
+- 写入：每轮 assistant 消息落库后，按 `ap_user_memory_state.last_message_id` 水位线增量读取该用户在该应用下的
+  全部会话消息，调用模型抽取 JSON 事实/偏好/片段；空回复/解析失败/模型异常不推进水位线，失败可重试。
+  落库前按 `content_hash` 去重、按 `AP_USER_MEMORY_DEDUP_THRESHOLD` 合并，超过 `AP_USER_MEMORY_MAX_PER_USER`
+  按重要度/最近命中淘汰；`AP_USER_MEMORY_TTL_DAYS` 控制过期。
+- 召回：只查 `ap_user_memory`（**不写知识库 dataset / 不污染 `retriever_resources`**），复用内置向量/全文/混合检索，
+  命中写入 `inputs.user_memory`（结构化）与 `inputs.user_memory_text`（文本）；autonomous 模式自动把后者注入 system 消息，
+  其它模式可在提示词里写 `{{ user_memory_text }}`。
+- 管理端：`GET /admin/user-memories`、`GET /admin/user-memories/users`、`POST|PUT|DELETE /admin/user-memories*`、
+  `POST /admin/user-memories/recall`、`POST /admin/user-memories/purge`、`GET /admin/memory/config`；
+  前端「用户记忆」页支持筛选、增删改、召回测试与按用户物理清除。
+- 隐私：`request.user` 目前是客户端自报，生产必须由网关注入可信 user 并开启管理端鉴权；`purge` 会物理删除
+  记忆与水位线；修改 `AP_EMBEDDING_DIM` / embedding 模型后旧记忆向量会失效，需要重建。
+
+老库执行 `sql/migrate_user_memory.sql`；新建库直接用 `sql/ddl.sql`。
+
+## Checkpoint 与人在环（HITL，仅管理端）
+
+- `AP_CHECKPOINTER_ENABLED=false` 时对话链路不实例化 saver、不写 `ap_checkpoint*`，行为与改造前一致；
+  开启后 `/v1/chat-messages` 以 `conversation_id` 作为 thread_id 落 checkpoint。
+- `AP_HITL_ENABLED=false` 时管理端 run 不创建运行记录、不中断；开启后管理端整图运行遇到 `approval` 节点会
+  通过 `interrupt()` 暂停，SSE 追加 `run_started` / `interrupt` 事件（**`final` 仍必须是最后一条**），
+  运行记录落 `ap_run`。
+- 恢复：`POST /admin/runs/{thread_id}/resume`（权限 `graph:write`），body `{interrupt_id, action, payload}`；
+  `action=approve/reject` 通过审批节点的出边句柄路由。`GET /admin/runs` 列表、`GET /admin/runs/{thread_id}` 查看
+  `values/next/interrupts`。前端图编辑器运行对话框与「运行记录」页可直接审批/恢复。
+- **对外 `/v1`、云智链路不暴露 interrupt**：审批节点在外部链路按 `default_action` 自动通过，仍以
+  `message`/`message_end` 收尾，Java/前端协议零改动。
+- `interrupt()` 恢复会从头重跑审批节点，审批节点只做纯表达式求值；不要在审批节点前放不可重入的副作用。
+- 老库执行 `sql/migrate_checkpoint_hitl.sql` + `sql/migrate_runs.sql`；`checkpoint`/`metadata`/`value` 必须是
+  `LONGBLOB`，`ap_checkpoint` 必须有 `metadata_type`，`ap_checkpoint_write` 必须有 `task_path`。
+
+## 动态子图（默认关闭）
+
+`AP_SUBGRAPH_ENABLED=false` 时，含 `subgraph` 节点的图发布/运行会返回 400；现有图不含该节点，行为不变。
+
+- `subgraph` 节点支持单子图（`app_uuid` + `version` / `template_key`）或候选子图 `candidates` +
+  `router`（智能体 code）；`router` 为空时用 `state.route` 或第一个候选。
+- **只引用已注册/已发布图或内置模板**；发布时递归校验引用存在、同租户、无环、嵌套深度不超过
+  `AP_SUBGRAPH_MAX_DEPTH`；候选子图编译为 langgraph 原生子图，父图通过条件边路由，`route` 契约不变。
+- HITL 运行启动时把未钉版本的 `app_uuid` 引用解析成具体版本并写入 `ap_run.graph_definition` 快照，
+  保证 interrupt 后 resume 不受后续发布/回滚影响。
+- 管理端 `GET /admin/graphs` 返回可引用的应用与模板；图编辑器新增「子图」「人工审批」节点。
+- 子图内部节点事件本批不展开，流式只报父图节点；子图内 `interrupt` 的恢复留待后续。
+
 
 ## 幂等与并发（默认关闭）
 

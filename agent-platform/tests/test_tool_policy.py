@@ -40,6 +40,11 @@ def test_validate_args_flags_missing_type_and_enum():
     assert any("参数 mode 取值需为" in item for item in errors)
 
 
+def test_validate_args_treats_string_false_as_optional():
+    assert validate_args([{"name": "q", "type": "string", "required": "false"}], {}) == []
+    assert validate_args([{"name": "q", "type": "string", "required": "true"}], {}) == ["缺少必填参数 q"]
+
+
 def test_validate_args_boolean_and_unknown_specs():
     params = [{"name": "flag", "type": "boolean"}, {"name": "items", "type": "array"}]
     assert validate_args(params, {"flag": "true", "items": [1]}) == []

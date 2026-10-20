@@ -3,14 +3,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('@/api/client', () => ({
   request: vi.fn(async () => ({ ok: true })),
   uploadRequest: vi.fn(async () => ({ ok: true })),
+  streamRequest: vi.fn(async () => ({ ok: true })),
 }))
 
-import { request, uploadRequest } from '@/api/client'
+import { request, streamRequest, uploadRequest } from '@/api/client'
 import * as api from '@/api'
 
 beforeEach(() => {
   request.mockClear()
   uploadRequest.mockClear()
+  streamRequest.mockClear()
 })
 
 describe('api endpoint map', () => {
@@ -59,6 +61,17 @@ describe('api endpoint map', () => {
     ['retrieveDataset', () => api.retrieveDataset('u', { query: 'q' }), '/admin/datasets/u/retrieve', { method: 'POST', body: { query: 'q' } }],
     ['previewChunks', () => api.previewChunks('fd'), '/admin/knowledge/preview', { method: 'POST', body: 'fd' }],
     ['listProviders', () => api.listProviders(), '/admin/providers', undefined],
+    ['listGraphOptions', () => api.listGraphOptions({ tenant_code: 't' }), '/admin/graphs', { params: { tenant_code: 't' } }],
+    ['listRuns', () => api.listRuns({ status: 'interrupted' }), '/admin/runs', { params: { status: 'interrupted' } }],
+    ['getRun', () => api.getRun('t1'), '/admin/runs/t1', undefined],
+    ['getMemoryConfig', () => api.getMemoryConfig(), '/admin/memory/config', undefined],
+    ['listUserMemories', () => api.listUserMemories({ user_key: 'u' }), '/admin/user-memories', { params: { user_key: 'u' } }],
+    ['listMemoryUsers', () => api.listMemoryUsers({ tenant_code: 't' }), '/admin/user-memories/users', { params: { tenant_code: 't' } }],
+    ['createUserMemory', () => api.createUserMemory({ content: 'c' }), '/admin/user-memories', { method: 'POST', body: { content: 'c' } }],
+    ['updateUserMemory', () => api.updateUserMemory('m1', { content: 'c' }), '/admin/user-memories/m1', { method: 'PUT', body: { content: 'c' } }],
+    ['deleteUserMemory', () => api.deleteUserMemory('m1'), '/admin/user-memories/m1', { method: 'DELETE' }],
+    ['recallUserMemory', () => api.recallUserMemory({ query: 'q' }), '/admin/user-memories/recall', { method: 'POST', body: { query: 'q' } }],
+    ['purgeUserMemories', () => api.purgeUserMemories({ user_key: 'u' }), '/admin/user-memories/purge', { method: 'POST', body: { user_key: 'u' } }],
     ['metricsOverview', () => api.metricsOverview({ days: 7 }), '/admin/metrics/overview', { params: { days: 7 } }],
   ]
 
@@ -75,5 +88,12 @@ describe('api endpoint map', () => {
     const onProgress = () => {}
     await api.uploadDatasetDocument('u', 'fd', onProgress)
     expect(uploadRequest).toHaveBeenCalledWith('/admin/datasets/u/documents/upload', 'fd', { onProgress })
+  })
+
+  it('resumeRun streams through streamRequest', async () => {
+    const onEvent = () => {}
+    const options = { signal: null }
+    await api.resumeRun('t1', { action: 'approve' }, onEvent, options)
+    expect(streamRequest).toHaveBeenCalledWith('/admin/runs/t1/resume', { action: 'approve' }, onEvent, options)
   })
 })

@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 import httpx
+from langgraph.types import interrupt
 
 from agent_platform.engine.code_sandbox import run_code
 from agent_platform.engine.context import EngineContext
@@ -15,6 +16,7 @@ from agent_platform.graph.schema import (
     AgentConfig,
     AggregateConfig,
     AnswerConfig,
+    ApprovalConfig,
     ClassifierClass,
     ConditionConfig,
     EndConfig,
@@ -361,11 +363,7 @@ def run_list_operator(node: NodeDef, state: GraphState, ctx: EngineContext) -> G
 
 
 async def run_agent_node(node: NodeDef, state: GraphState, ctx: EngineContext) -> GraphState:
-    """智能体节点：按 7 种工作模式执行。
-
-    `variables[output_var]` 存最终答复字符串；`variables[node_id]` 存结构化结果
-    （answer / reasoning / steps / sources / mode / agent）；supervisor 的 route 写入 state。
-    """
+    """智能体节点：按 8 种工作模式执行。"""
     config: AgentConfig = node.typed_config()
     variables = _variables(state)
     result = await ctx.agents(config, variables, ctx, ctx.tenant_code)
@@ -375,6 +373,64 @@ async def run_agent_node(node: NodeDef, state: GraphState, ctx: EngineContext) -
     if result.get("route"):
         next_state["route"] = str(result["route"])
     return next_state
+
+
+def run_approval(node: NodeDef, state: GraphState, ctx: EngineContext) -> GraphState:
+    """人工审批：HITL 开启时中断等待 resume；关闭时按默认动作自动通过。"""
+    config: ApprovalConfig = node.typed_config()
+    variables = _variables(state)
+    if getattr(ctx, "hitl_enabled", False):
+        payload = evaluate(config.payload, variables) if config.payload else {}
+        decision = interrupt(
+            {
+                "node": node.id,
+                "title": node.title,
+                "question": config.question,
+                "options": list(config.options),
+                "payload": payload,
+            }
+        )
+    else:
+        decision = {"action": config.default_action}
+    if not isinstance(decision, dict):
+        decision = {"action": config.default_action}
+    variables[node.id] = decision
+    variables[config.output_var] = decision
+    next_state: GraphState = {**state, "variables": variables}
+    if decision.get("action"):
+        next_state["route"] = str(decision["action"])
+    return next_state
+
+
+async def run_subgraph_node(node: NodeDef, state: GraphState, ctx: EngineContext) -> GraphState:
+    """单点运行子图节点（编辑器「运行此节点」）；候选多选时使用第一个。"""
+    from agent_platform.engine.builder import build_graph
+    from agent_platform.graph.schema import SubgraphRef
+
+    if not getattr(ctx, "subgraph_enabled", False):
+        raise ValueError("子图功能未启用（AP_SUBGRAPH_ENABLED=false）")
+    config = node.typed_config()
+    refs = list(config.candidates or [])
+    if not refs and (config.app_uuid or config.template_key):
+        refs = [SubgraphRef(app_uuid=config.app_uuid, template_key=config.template_key, version=config.version)]
+    if not refs:
+        raise ValueError(f"子图节点 {node.id} 未配置引用")
+    resolver = getattr(ctx, "resolve_subgraph", None)
+    if resolver is None:
+        raise ValueError("子图解析器未配置")
+    child_def = resolver(refs[0], ctx.tenant_code)
+    if child_def is None:
+        raise ValueError(f"子图不存在或不可见：{refs[0].app_uuid or refs[0].template_key}")
+    child = build_graph(child_def, ctx, None)
+    result = await child.ainvoke({"inputs": dict(state.get("variables") or {})})
+    variables = _variables(state)
+    variables[config.output_var] = result.get("answer", "")
+    variables[node.id] = result
+    return {
+        **state,
+        "variables": variables,
+        "answer": result.get("answer", state.get("answer", "")),
+    }
 
 
 def run_end(node: NodeDef, state: GraphState, ctx: EngineContext) -> GraphState:

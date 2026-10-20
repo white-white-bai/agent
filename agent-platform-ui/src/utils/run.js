@@ -34,3 +34,25 @@ export function formatRunOutput(value) {
     return String(value)
   }
 }
+
+export function summarizeInterrupt(event = {}) {
+  const pending = (event.interrupts || [])[0] || {}
+  const value = pending.value || event.value || {}
+  return {
+    id: pending.id || event.interrupt_id || '',
+    node: value.node || event.node || '',
+    title: value.title || value.node || '',
+    question: value.question || '请确认是否继续执行',
+    options: value.options || ['approve', 'reject'],
+    payload: value.payload || {},
+  }
+}
+
+export function buildResumePayload(event = {}, { action = 'approve', payload = {} } = {}) {
+  const summary = summarizeInterrupt(event)
+  return {
+    interrupt_id: summary.id,
+    action,
+    payload,
+  }
+}

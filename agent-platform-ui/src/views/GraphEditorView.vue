@@ -3,13 +3,13 @@ import { computed, onBeforeUnmount, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { getApp, getGraph, getGraphTemplate, importGraph, importGraphFile, listAgents, listDatasets, listGraphVersions, listProviders, publishGraph, rollbackGraph, runGraphStream, runNode, saveGraphDraft } from '@/api'
+import { getApp, getGraph, getGraphTemplate, importGraph, importGraphFile, listAgents, listDatasets, listGraphOptions, listGraphVersions, listProviders, publishGraph, resumeRun, rollbackGraph, runGraphStream, runNode, saveGraphDraft } from '@/api'
 import GraphCanvas from '@/components/GraphCanvas.vue'
 import NodeInspector from '@/components/NodeInspector.vue'
 import NodePalette from '@/components/NodePalette.vue'
 import RowsEditor from '@/components/fields/RowsEditor.vue'
 import { useAuthStore } from '@/stores/auth'
-import { buildRunInputs, formatRunOutput, mergeRunInputs } from '@/utils/run'
+import { buildResumePayload, buildRunInputs, formatRunOutput, mergeRunInputs, summarizeInterrupt } from '@/utils/run'
 
 const route = useRoute()
 const auth = useAuthStore()
@@ -40,6 +40,8 @@ const modelOptions = ref([])
 const agentOptions = ref([])
 // 可用知识库（/admin/datasets），供 knowledge 节点的下拉使用
 const datasetOptions = ref([])
+// 可作为子图引用的应用（/admin/graphs）
+const graphOptions = ref([])
 
 // 运行（整图 / 单节点）
 const runDialog = ref(false)
@@ -51,6 +53,8 @@ const runFinal = ref(null)
 const runSteps = ref([])
 const runBusy = ref(false)
 const runError = ref('')
+const runThreadId = ref('')
+const runInterrupt = ref(null)
 const runColumns = [
   { key: 'name', label: '变量名', kind: 'text' },
   { key: 'value', label: '值', kind: 'text' },
@@ -58,6 +62,7 @@ const runColumns = [
 let runController = null
 
 const title = computed(() => (app.value && app.value.app_name) || appUuid)
+const runInterruptInfo = computed(() => summarizeInterrupt(runInterrupt.value || {}))
 
 async function loadModelOptions() {
   try {
@@ -85,6 +90,18 @@ async function loadDatasetOptions() {
     return rows.map((item) => ({ value: item.uuid, label: item.name || item.uuid }))
   } catch {
     // 拿不到知识库清单不阻断编辑器
+    return []
+  }
+}
+
+async function loadGraphOptions() {
+  try {
+    const data = await listGraphOptions({ tenant_code: (app.value && app.value.tenant_code) || '' })
+    return (data.apps || []).map((item) => ({
+      value: item.app_uuid,
+      label: `${item.app_name || item.app_uuid}${item.version ? `（v${item.version}）` : ''}`,
+    }))
+  } catch {
     return []
   }
 }
@@ -117,6 +134,7 @@ async function load() {
     modelOptions.value = await loadModelOptions()
     agentOptions.value = await loadAgentOptions()
     datasetOptions.value = await loadDatasetOptions()
+    graphOptions.value = await loadGraphOptions()
   } catch (error) {
     ElMessage.error(error.message || '加载失败')
   } finally {
@@ -320,6 +338,8 @@ function openRunDialog() {
   runFinal.value = null
   runSteps.value = []
   runError.value = ''
+  runThreadId.value = ''
+  runInterrupt.value = null
   runDialog.value = true
 }
 
@@ -331,7 +351,9 @@ function onRunEvent(event) {
   if (!event || !event.type) {
     return
   }
-  if (event.type === 'token') {
+  if (event.type === 'run_started') {
+    runThreadId.value = event.thread_id || ''
+  } else if (event.type === 'token') {
     runOutput.value += event.content || ''
   } else if (event.type === 'node_start') {
     runSteps.value.push({ node: event.node, title: event.title || event.node, status: 'running' })
@@ -342,8 +364,16 @@ function onRunEvent(event) {
     } else {
       runSteps.value.push({ node: event.node, title: event.node, status: 'done' })
     }
+  } else if (event.type === 'interrupt') {
+    runInterrupt.value = event
+    const pending = summarizeInterrupt(event)
+    const step = runSteps.value.find((item) => item.node === pending.node)
+    if (step) {
+      step.status = 'interrupted'
+    }
   } else if (event.type === 'final') {
     runFinal.value = event.state || {}
+    runInterrupt.value = null
     if (!runOutput.value) {
       runOutput.value = event.answer || ''
     }
@@ -358,6 +388,8 @@ async function startRun() {
   runOutput.value = ''
   runFinal.value = null
   runSteps.value = []
+  runThreadId.value = ''
+  runInterrupt.value = null
   runController = new AbortController()
   try {
     if (runTarget.value) {
@@ -370,6 +402,26 @@ async function startRun() {
   } catch (error) {
     if (error.name !== 'AbortError') {
       runError.value = error.message || '运行失败'
+    }
+  } finally {
+    runBusy.value = false
+    runController = null
+  }
+}
+
+async function resumeWith(action) {
+  if (!runThreadId.value) {
+    return
+  }
+  runBusy.value = true
+  runError.value = ''
+  runController = new AbortController()
+  try {
+    const body = buildResumePayload(runInterrupt.value, { action })
+    await resumeRun(runThreadId.value, body, onRunEvent, { signal: runController.signal })
+  } catch (error) {
+    if (error.name !== 'AbortError') {
+      runError.value = error.message || '恢复运行失败'
     }
   } finally {
     runBusy.value = false
@@ -429,6 +481,7 @@ function onRemove(id) {
           :model-options="modelOptions"
           :agent-options="agentOptions"
           :dataset-options="datasetOptions"
+          :graph-options="graphOptions"
           @update="onUpdate"
           @remove="onRemove"
           @run="openNodeRun"
@@ -494,6 +547,15 @@ function onRemove(id) {
 
       <el-alert v-if="runError" type="error" :closable="false" show-icon class="editor__warnings">{{ runError }}</el-alert>
 
+      <el-alert v-if="runInterrupt" type="warning" :closable="false" show-icon class="editor__warnings">
+        <p>{{ runInterruptInfo.question }}</p>
+        <pre v-if="runInterruptInfo.payload && Object.keys(runInterruptInfo.payload).length">{{ formatRunOutput(runInterruptInfo.payload) }}</pre>
+        <div class="editor__interrupt-actions">
+          <el-button size="small" type="success" :loading="runBusy" @click="resumeWith('approve')">通过</el-button>
+          <el-button size="small" type="danger" :loading="runBusy" @click="resumeWith('reject')">驳回</el-button>
+        </div>
+      </el-alert>
+
       <div v-if="runSteps.length" class="editor__steps">
         <el-tag
           v-for="step in runSteps"
@@ -516,7 +578,7 @@ function onRemove(id) {
       <template #footer>
         <el-button v-if="runBusy" @click="stopRun">停止</el-button>
         <el-button v-else @click="runDialog = false">关闭</el-button>
-        <el-button type="primary" :loading="runBusy" @click="startRun">开始运行</el-button>
+        <el-button v-if="!runInterrupt" type="primary" :loading="runBusy" @click="startRun">开始运行</el-button>
       </template>
     </el-dialog>
   </div>
@@ -578,6 +640,19 @@ function onRemove(id) {
 .editor__warnings p {
   margin: 0;
   font-size: 12px;
+}
+
+.editor__warnings pre {
+  margin: 6px 0 0;
+  max-height: 120px;
+  overflow: auto;
+  font-size: 12px;
+}
+
+.editor__interrupt-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .editor__steps {

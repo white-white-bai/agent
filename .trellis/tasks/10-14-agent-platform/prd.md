@@ -297,7 +297,32 @@
 - [x] 测试：后端 `pytest` 462 项 + `ruff` 通过（新增 `tests/test_chunking.py`，及 `test_knowledge`/`test_admin_api` 的知识库/预览/经济/全文/覆盖用例）；前端 `npm test` 192 项 + `lint` + `build` 通过
 - [x] 文档：`agent-platform/README.md`（分段/清洗、索引方式、预览接口、检索模式与优先级、迁移脚本）、`agent-platform-ui/README.md`
 
-**未纳入本批**：无（决策清单的 M1～M4 各项均已交付）。
+**M-续批（2026-10-20）· 向强 Agent 对齐：autonomous 模式**：在既有 `agent` 节点内新增原生工具调用闭环，图编排仍是外层边界。
+
+- [x] Agent 模式：`AGENT_MODES` / `MODES` 新增 `autonomous`（显式选择，默认不启用）；现有 7 种模式与内置智能体不变
+- [x] LLM 调用层：`LLMInvoker` 增加可选 `messages/tools/tool_choice/return_message/tags`（旧 5 参数路径不变）；`models/factory.py` 支持 `bind_tools`、返回 `AIMessage`、ChatOpenAI 复用与可配超时/重试
+- [x] 自主循环：消息栈（system + summary + history + query）、原生 `tool_calls` → `ToolMessage` 回灌、连续失败重规划、重复调用早停、轮数耗尽禁用工具收口、工具结果截断
+- [x] 工具 schema：新增 `tools/schema.py`（`ap_tool.params` / MCP `inputSchema` → OpenAI function schema、点号工具名安全化与映射）
+- [x] MCP 运行时发现：新增 `tools/discovery.py`（`tools/list` + TTL 缓存 + 租户隔离 + 上限），`ToolRef.discover` 控制；`AP_TOOL_DISCOVERY_ENABLED` 默认关闭
+- [x] 流式过滤：自主循环中间轮与反思轮不下发 token，最终答复轮 flush；对外 SSE 事件不变
+- [x] 前端：智能体页与 agent 节点新增 `autonomous` 选项、节点级 `tools/pipeline/prompt_template/reflection_rounds` 字段，`RowsEditor` 支持布尔列
+- [x] 测试：后端新增 `test_agent_autonomous.py` / `test_tool_discovery.py` / `test_stream_filter.py`，并补齐 schema/agents/admin 用例；前端补 agent 字段与布尔行用例
+- [x] 文档：`agent-platform/README.md`、`agent-platform/.env.example`
+- [x] 未纳入本批：用户级长期记忆、checkpointer 接线与 `interrupt/resume` 人在环、运行时改图/动态选子图（已在下一节交付）
+
+**M-续批（2026-10-20）· 用户级长期记忆 / HITL / 动态子图**：三块能力全部默认关闭，关闭时现有链路不变。
+
+- [x] 用户级长期记忆：新增 `ap_user_memory` / `ap_user_memory_state`；`memory/{store,recall,extract}.py` 做 CRUD、去重、水位线增量抽取、向量/全文/混合召回与注入；按租户+应用+用户隔离；管理端 CRUD/召回测试/按用户物理清除；`AP_USER_MEMORY_*` 默认关闭
+- [x] checkpointer 修复与接线：补 `ap_checkpoint.metadata_type`、`LONGBLOB`、`ap_checkpoint_write.task_path`；修复 `put_writes` 的 `WRITES_IDX_MAP`/去重/排序、`list(before/filter)`、`delete_thread`、async 不阻塞；`AP_CHECKPOINTER_ENABLED` 控制对话链路接线
+- [x] HITL：新增 `approval` 节点与 `interrupt()/Command(resume=...)`；管理端 run 新增 `run_started`/`interrupt` 事件、`ap_run` 运行记录、`/admin/runs*` 列表/详情/恢复接口；前端图编辑器与「运行记录」页支持审批/驳回；对外 `/v1`、云智链路不暴露 interrupt，审批节点自动通过
+- [x] 动态子图：新增 `subgraph` 节点/`SubgraphRef`/`SubgraphConfig`；`services.resolve_subgraph/validate_subgraph_refs/pin_subgraph_refs`；builder 递归编译候选子图并复用 `route` 条件边；发布时校验引用/租户/环/深度；`AP_SUBGRAPH_ENABLED` 默认关闭
+- [x] 前端：新增「用户记忆」「运行记录」页；图编辑器新增 `approval`/`subgraph` 节点、`graph-select` 字段、运行中断面板与恢复按钮
+- [x] SQL：`sql/ddl.sql` 同步新表/列；新增 `sql/migrate_checkpoint_hitl.sql`、`sql/migrate_user_memory.sql`、`sql/migrate_runs.sql`
+- [x] 测试：新增 `test_user_memory.py`、`test_hitl.py`、`test_checkpoint_wiring.py`、`test_subgraph.py`；扩展 `test_checkpoint.py`；前端补 run/api/views/components/nodeMeta 用例
+- [x] 文档：`agent-platform/README.md`、`.env.example`、`agent-platform-ui/README.md`、`AGENTS.md`/`CLAUDE.md`
+- [ ] 未纳入：子图内部 interrupt 的事件展开与恢复、运行 cancel、用户记忆跨应用聚合的独立 UI（当前用 `AP_USER_MEMORY_SCOPE` 配置）
+
+**M1～M4 决策清单**：无未交付项。
 
 **环境备注**：本机 Python 3.11.1；依赖已 `pip install -e ".[dev]"`；测试用临时 SQLite（`conftest.py`），生产用 MySQL（`sql/ddl.sql` 人工执行）。
 

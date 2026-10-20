@@ -121,11 +121,13 @@ CREATE TABLE IF NOT EXISTS ap_checkpoint (
     parent_checkpoint_id VARCHAR(128) NULL,
     type                 VARCHAR(32)  NOT NULL,
     checkpoint           LONGBLOB     NOT NULL,
+    metadata_type        VARCHAR(32)  NOT NULL DEFAULT 'json',
     metadata             LONGBLOB     NOT NULL,
     created_at           DATETIME     NOT NULL,
     PRIMARY KEY (id),
     UNIQUE KEY uk_ap_checkpoint (thread_id, checkpoint_ns, checkpoint_id),
-    KEY idx_ap_checkpoint_thread (thread_id)
+    KEY idx_ap_checkpoint_thread (thread_id),
+    KEY idx_ap_checkpoint_thread_ns (thread_id, checkpoint_ns, id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'LangGraph checkpoint（自研 MySQL checkpointer）';
 
 CREATE TABLE IF NOT EXISTS ap_checkpoint_write (
@@ -134,6 +136,7 @@ CREATE TABLE IF NOT EXISTS ap_checkpoint_write (
     checkpoint_ns VARCHAR(128) NOT NULL DEFAULT '',
     checkpoint_id VARCHAR(128) NOT NULL,
     task_id       VARCHAR(128) NOT NULL,
+    task_path     VARCHAR(128) NOT NULL DEFAULT '',
     idx           INT          NOT NULL,
     channel       VARCHAR(128) NOT NULL,
     type          VARCHAR(32)  NOT NULL,
@@ -332,3 +335,65 @@ CREATE TABLE IF NOT EXISTS ap_agent (
     UNIQUE KEY uk_ap_agent_code (code),
     KEY idx_ap_agent_tenant (tenant_code)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '智能体定义（角色 / 工作模式 / 工具 / 提示词）';
+
+CREATE TABLE IF NOT EXISTS ap_run (
+    id                BIGINT       NOT NULL AUTO_INCREMENT,
+    uuid              VARCHAR(64)  NOT NULL,
+    tenant_code       VARCHAR(64)  NOT NULL DEFAULT '',
+    app_uuid          VARCHAR(64)  NOT NULL DEFAULT '',
+    thread_id         VARCHAR(128) NOT NULL,
+    status            VARCHAR(16)  NOT NULL DEFAULT 'running',
+    graph_definition  JSON         NULL,
+    interrupt_payload JSON         NULL,
+    created_by        VARCHAR(64)  NOT NULL DEFAULT '',
+    created_at        DATETIME     NOT NULL,
+    updated_at        DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_ap_run_uuid (uuid),
+    UNIQUE KEY uk_ap_run_thread (thread_id),
+    KEY idx_ap_run_status (status),
+    KEY idx_ap_run_app (app_uuid)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '管理端图运行记录（HITL 中断/恢复）';
+
+CREATE TABLE IF NOT EXISTS ap_user_memory (
+    id                     BIGINT       NOT NULL AUTO_INCREMENT,
+    uuid                   VARCHAR(64)  NOT NULL,
+    tenant_code            VARCHAR(64)  NOT NULL DEFAULT '',
+    app_uuid               VARCHAR(64)  NOT NULL DEFAULT '',
+    user_key               VARCHAR(128) NOT NULL,
+    user_name              VARCHAR(128) NOT NULL DEFAULT '',
+    kind                   VARCHAR(16)  NOT NULL DEFAULT 'fact',
+    content                LONGTEXT     NULL,
+    embedding              JSON         NULL,
+    embedding_model        VARCHAR(64)  NOT NULL DEFAULT '',
+    importance             FLOAT        NOT NULL DEFAULT 0.5,
+    source_conversation_id VARCHAR(64)  NOT NULL DEFAULT '',
+    source_message_id      VARCHAR(64)  NOT NULL DEFAULT '',
+    content_hash           VARCHAR(64)  NOT NULL DEFAULT '',
+    enabled                INT          NOT NULL DEFAULT 1,
+    hit_count              INT          NOT NULL DEFAULT 0,
+    last_hit_at            DATETIME     NULL,
+    expires_at             DATETIME     NULL,
+    is_deleted             INT          NOT NULL DEFAULT 0,
+    created_at             DATETIME     NOT NULL,
+    updated_at             DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_ap_user_memory_uuid (uuid),
+    UNIQUE KEY uk_ap_user_memory_dedup (tenant_code, user_key, app_uuid, content_hash),
+    KEY idx_ap_user_memory_scope (tenant_code, user_key, app_uuid, is_deleted)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT '用户级长期记忆';
+
+CREATE TABLE IF NOT EXISTS ap_user_memory_state (
+    id              BIGINT       NOT NULL AUTO_INCREMENT,
+    uuid            VARCHAR(64)  NOT NULL,
+    tenant_code     VARCHAR(64)  NOT NULL DEFAULT '',
+    app_uuid        VARCHAR(64)  NOT NULL DEFAULT '',
+    user_key        VARCHAR(128) NOT NULL,
+    last_message_id BIGINT       NOT NULL DEFAULT 0,
+    last_run_at     DATETIME     NULL,
+    created_at      DATETIME     NOT NULL,
+    updated_at      DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_ap_user_memory_state_uuid (uuid),
+    UNIQUE KEY uk_ap_user_memory_state (tenant_code, user_key, app_uuid)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT '用户记忆抽取水位线';

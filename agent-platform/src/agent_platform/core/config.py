@@ -62,6 +62,41 @@ class Settings(BaseSettings):
 
     # 智能体：ReAct 等模式的默认步数上限
     agent_max_steps: int = 6
+    # 智能体自主循环：单个工具结果回灌模型时的最大字符数
+    agent_tool_result_max_chars: int = 4000
+
+    # MCP 工具运行时发现：默认关闭，关闭时只用 ap_tool 声明
+    tool_discovery_enabled: bool = False
+    tool_discovery_ttl_seconds: int = 300
+    tool_discovery_max_tools: int = 50
+
+    # 模型调用：0 表示沿用 endpoint 默认超时；重试次数与 ChatOpenAI 默认一致
+    llm_timeout_seconds: float = 0.0
+    llm_max_retries: int = 2
+
+    # checkpointer / 人在环（默认关闭）
+    checkpointer_enabled: bool = False
+    hitl_enabled: bool = False
+
+    # 动态子图（默认关闭）
+    subgraph_enabled: bool = False
+    subgraph_max_depth: int = 2
+
+    # 用户级长期记忆（默认关闭；关闭时不查不写、不注入图输入）
+    user_memory_enabled: bool = False
+    user_memory_write_enabled: bool = False
+    user_memory_recall_enabled: bool = False
+    user_memory_extract_async: bool = True
+    user_memory_provider: str = ""
+    user_memory_max_chars: int = 4000
+    user_memory_top_k: int = 5
+    user_memory_score_threshold: float | None = None
+    user_memory_mode: str = "vector"
+    user_memory_scope: str = "app"
+    user_memory_max_per_user: int = 200
+    user_memory_ttl_days: int = 0
+    user_memory_dedup_threshold: float = 0.92
+    user_memory_inject_var: str = "user_memory_text"
 
     # 检索流水线
     # 粗召回（向量）候选数；0 表示用知识节点自己的 top_k

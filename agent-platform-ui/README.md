@@ -10,13 +10,15 @@ agent 中台的独立管理端。Vue 3 + Vite + Element Plus + Pinia + vue-route
 | --- | --- | --- |
 | `/login` | `LoginView` | 登录，支持 `?redirect=` 回跳 |
 | `/apps` | `AppsView` | agent 应用注册（列表 / 新增 / 编辑 / 删除） |
-| `/apps/:appUuid/graph` | `GraphEditorView` | 图编辑器（AntV X6）、草稿保存、发布、版本回滚、Dify DSL 导入、运行（整图流式 SSE + 单节点运行） |
+| `/apps/:appUuid/graph` | `GraphEditorView` | 图编辑器（AntV X6）、草稿保存、发布、版本回滚、Dify DSL 导入、运行（整图流式 SSE + 单节点运行 + HITL 审批/恢复） |
 | `/providers` | `ProvidersView` | 大模型 / 检索 / 向量 / 观测 provider 配置（含检索流水线只读回显） |
-| `/agents` | `AgentsView` | 智能体定义（角色 / 7 种工作模式 / 工具 / 提示词 / CoT） |
+| `/agents` | `AgentsView` | 智能体定义（角色 / 8 种工作模式 / 工具 / 提示词 / CoT） |
 | `/tools` | `ToolsView` | 生产级工具声明（参数 schema / 重试 / 兜底）与试调 |
 | `/prompts` | `PromptsView` | 少样本提示词模板（system 骨架 + 示例 + CoT 提示） |
 | `/mcp` | `McpServersView` | 工具（MCP server）配置 |
 | `/knowledge` | `KnowledgeView` | 知识库：创建向导（选数据源→分段与清洗含预览→处理完成）、知识库列表（建/改/删）、文档管理（上传/进度/批量/重传/状态轮询/每文档覆盖分段）、分段查看编辑、召回测试 |
+| `/memory` | `MemoryView` | 用户级长期记忆：筛选 / 增删改 / 召回测试 / 按用户清除 / 开关只读回显 |
+| `/runs` | `RunsView` | 管理端运行记录：等待审批的 HITL 运行、审批/恢复、状态筛选 |
 | `/guards` | `GuardsView` | 护栏总开关、敏感词、配额 / 限流 / 轮次、兜底回复 |
 | `/accounts` | `AccountsView` | 账号与角色 |
 | `/metrics` | `MetricsView` | 监控看板（会话 / 消息 / 满意度 / Token / 异常趋势） |

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent_platform.api import services
 from agent_platform.core.config import Settings, get_settings
 from agent_platform.engine.agents.runner import build_agent_invoker
 from agent_platform.engine.context import EngineContext
@@ -25,4 +26,6 @@ def build_engine_context(
         agents=build_agent_invoker(settings),
         tenant_code=tenant_code,
         tracer=tracer,
+        subgraph_enabled=settings.subgraph_enabled,
+        resolve_subgraph=lambda ref, tenant: services.resolve_subgraph(ref, tenant),
     )

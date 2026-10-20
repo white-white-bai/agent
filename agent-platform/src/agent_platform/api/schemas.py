@@ -145,6 +145,14 @@ class RunNodeRequest(BaseModel):
 class RunGraphRequest(BaseModel):
     definition: dict[str, Any] | None = None
     inputs: dict[str, Any] = Field(default_factory=dict)
+    thread_id: str = ""
+
+
+class ResumeRunRequest(BaseModel):
+    interrupt_id: str = ""
+    action: str = "approve"
+    payload: dict[str, Any] = Field(default_factory=dict)
+    definition: dict[str, Any] | None = None
 
 
 class ToolParamSpec(BaseModel):
@@ -249,6 +257,33 @@ class RetrieveRequest(BaseModel):
     query: str = ""
     top_k: int | None = None
     score_threshold: float | None = None
+
+
+class UserMemoryUpsertRequest(BaseModel):
+    tenant_code: str = ""
+    app_uuid: str = ""
+    user_key: str = ""
+    user_name: str = ""
+    kind: str = "fact"
+    content: str = ""
+    importance: float = 0.5
+    enabled: bool = True
+    expires_at: str = ""
+
+
+class UserMemoryRecallRequest(BaseModel):
+    tenant_code: str = ""
+    app_uuid: str = ""
+    user_key: str = ""
+    query: str = ""
+    top_k: int | None = None
+    score_threshold: float | None = None
+
+
+class UserMemoryPurgeRequest(BaseModel):
+    tenant_code: str = ""
+    app_uuid: str = ""
+    user_key: str = ""
 
 
 # --------------------------------------------------------------------------- 管理端账号

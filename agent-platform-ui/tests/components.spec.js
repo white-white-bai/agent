@@ -153,6 +153,27 @@ describe('RowsEditor', () => {
     await wrapper.find('.rows__remove').trigger('click')
     expect(wrapper.emitted('update:modelValue').at(-1)).toEqual([[{ name: 'b', args: {} }]])
   })
+
+  it('renders boolean columns as switches and seeds them as false', async () => {
+    const boolColumns = [
+      { key: 'name', label: '工具名', kind: 'text' },
+      { key: 'discover', label: '发现', kind: 'boolean' },
+    ]
+    const wrapper = mount(RowsEditor, {
+      props: { modelValue: [{ name: 'a', discover: true }], columns: boolColumns },
+    })
+    const switches = wrapper.findAllComponents({ name: 'ElSwitch' })
+    expect(switches).toHaveLength(1)
+    expect(switches[0].props('modelValue')).toBe(true)
+
+    await wrapper.findAll('button').at(-1).trigger('click')
+    expect(wrapper.emitted('update:modelValue').at(-1)).toEqual([
+      [
+        { name: 'a', discover: true },
+        { name: '', discover: false },
+      ],
+    ])
+  })
 })
 
 describe('NodeInspector', () => {
@@ -166,6 +187,33 @@ describe('NodeInspector', () => {
     expect(wrapper.text()).toContain('llm_1')
     expect(wrapper.text()).toContain('系统提示词')
     expect(wrapper.text()).toContain('temperature')
+  })
+
+  it('renders the agent tool pool and reflection fields', () => {
+    const wrapper = mount(NodeInspector, {
+      props: { node: { id: 'agent_1', type: 'agent', title: '智能体', config: defaultConfig('agent') } },
+    })
+    expect(wrapper.text()).toContain('工具池')
+    expect(wrapper.text()).toContain('反思轮数')
+    expect(wrapper.text()).toContain('流水线成员')
+  })
+
+  it('renders approval and subgraph configuration fields', () => {
+    const approval = mount(NodeInspector, {
+      props: { node: { id: 'approval_1', type: 'approval', title: '审批', config: defaultConfig('approval') } },
+    })
+    expect(approval.text()).toContain('审批问题')
+    expect(approval.text()).toContain('默认动作')
+
+    const subgraph = mount(NodeInspector, {
+      props: {
+        node: { id: 'subgraph_1', type: 'subgraph', title: '子图', config: defaultConfig('subgraph') },
+        graphOptions: [{ value: 'app-1', label: '子图应用' }],
+      },
+    })
+    expect(subgraph.text()).toContain('候选子图')
+    expect(subgraph.text()).toContain('路由智能体')
+    expect(subgraph.text()).toContain('子图应用')
   })
 
   it('emits update when the node title changes', () => {

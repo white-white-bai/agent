@@ -17,7 +17,7 @@ function cellKey(index, key) {
 function emptyRow() {
   const row = {}
   props.columns.forEach((column) => {
-    row[column.key] = column.kind === 'json' ? {} : ''
+    row[column.key] = column.kind === 'json' ? {} : column.kind === 'boolean' ? false : ''
   })
   return row
 }
@@ -86,6 +86,11 @@ function setJson(index, key, text) {
           :rows="2"
           :model-value="raw[cellKey(index, column.key)]"
           @update:model-value="(text) => setJson(index, column.key, text)"
+        />
+        <el-switch
+          v-else-if="column.kind === 'boolean'"
+          v-model="row[column.key]"
+          @change="commit"
         />
         <el-input v-else v-model="row[column.key]" @change="commit" />
       </div>

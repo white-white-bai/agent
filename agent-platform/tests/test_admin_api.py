@@ -717,6 +717,10 @@ def test_agent_crud_and_mode_validation(api_client):
     assert bad.status_code == 400
     assert "不支持的工作模式" in bad.json()["detail"]
 
+    auto = api_client.post("/admin/agents", json={"code": "local.auto", "mode": "autonomous"})
+    assert auto.status_code == 200
+    assert auto.json()["data"]["mode"] == "autonomous"
+
     assert api_client.post("/admin/agents", json={"code": "local.custom"}).status_code == 409
 
     updated = api_client.put(f"/admin/agents/{row['uuid']}", json={"code": "x", "mode": "deep_search", "label": "改名"})

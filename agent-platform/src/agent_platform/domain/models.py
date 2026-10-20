@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import ClassVar
 
-from sqlalchemy import JSON, DateTime, Integer, LargeBinary, String, Text, UniqueConstraint
+from sqlalchemy import JSON, DateTime, Float, Index, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.dialects import mysql
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -9,6 +9,8 @@ from agent_platform.core.db import Base
 
 # 知识库文档原文可达 15MB，MySQL 下需 LONGTEXT（Text 仅 64KB）；SQLite/其它方言仍用 TEXT
 LongText = Text().with_variant(mysql.LONGTEXT, "mysql")
+# checkpoint 整份 state 可能超过 64KB，MySQL 下必须 LONGBLOB
+LongBlob = LargeBinary().with_variant(mysql.LONGBLOB, "mysql")
 # 知识库三表统一排序规则：分段与文档按 uuid 关联，collation 不一致会触发 MySQL「Illegal mix of collations」
 KB_TABLE_ARGS: dict[str, str] = {"mysql_charset": "utf8mb4", "mysql_collate": "utf8mb4_unicode_ci"}
 
@@ -130,9 +132,9 @@ class Checkpoint(Base):
     checkpoint_id: Mapped[str] = mapped_column(String(128), index=True)
     parent_checkpoint_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     type: Mapped[str] = mapped_column(String(32))
-    checkpoint: Mapped[bytes] = mapped_column(LargeBinary)
+    checkpoint: Mapped[bytes] = mapped_column(LongBlob)
     metadata_type: Mapped[str] = mapped_column(String(32))
-    metadata_blob: Mapped[bytes] = mapped_column("metadata", LargeBinary)
+    metadata_blob: Mapped[bytes] = mapped_column("metadata", LongBlob)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
@@ -226,10 +228,11 @@ class CheckpointWrite(Base):
     checkpoint_ns: Mapped[str] = mapped_column(String(128), default="")
     checkpoint_id: Mapped[str] = mapped_column(String(128), index=True)
     task_id: Mapped[str] = mapped_column(String(128))
+    task_path: Mapped[str] = mapped_column(String(128), default="")
     idx: Mapped[int] = mapped_column(Integer)
     channel: Mapped[str] = mapped_column(String(128))
     type: Mapped[str] = mapped_column(String(32))
-    value: Mapped[bytes] = mapped_column(LargeBinary)
+    value: Mapped[bytes] = mapped_column(LongBlob)
 
 
 class AdminRole(Base):
@@ -343,5 +346,73 @@ class Agent(Base):
     max_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_builtin: Mapped[int] = mapped_column(Integer, default=0)
     is_deleted: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class Run(Base):
+    """管理端图运行记录：承载 HITL 中断/恢复与图定义快照。"""
+
+    __tablename__ = "ap_run"
+    __table_args__ = (UniqueConstraint("thread_id", name="uk_ap_run_thread"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    tenant_code: Mapped[str] = mapped_column(String(64), index=True, default="")
+    app_uuid: Mapped[str] = mapped_column(String(64), index=True, default="")
+    thread_id: Mapped[str] = mapped_column(String(128), index=True)
+    status: Mapped[str] = mapped_column(String(16), default="running")
+    graph_definition: Mapped[dict] = mapped_column(JSON, default=dict)
+    interrupt_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_by: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class UserMemory(Base):
+    """用户级长期记忆条目：按租户 + 应用 + 用户隔离。"""
+
+    __tablename__ = "ap_user_memory"
+    __table_args__ = (
+        UniqueConstraint("tenant_code", "user_key", "app_uuid", "content_hash", name="uk_ap_user_memory_dedup"),
+        Index("idx_ap_user_memory_scope", "tenant_code", "user_key", "app_uuid", "is_deleted"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    tenant_code: Mapped[str] = mapped_column(String(64), index=True, default="")
+    app_uuid: Mapped[str] = mapped_column(String(64), index=True, default="")
+    user_key: Mapped[str] = mapped_column(String(128), index=True)
+    user_name: Mapped[str] = mapped_column(String(128), default="")
+    kind: Mapped[str] = mapped_column(String(16), default="fact")
+    content: Mapped[str] = mapped_column(LongText, default="")
+    embedding: Mapped[list] = mapped_column(JSON, default=list)
+    embedding_model: Mapped[str] = mapped_column(String(64), default="")
+    importance: Mapped[float] = mapped_column(Float, default=0.5)
+    source_conversation_id: Mapped[str] = mapped_column(String(64), default="")
+    source_message_id: Mapped[str] = mapped_column(String(64), default="")
+    content_hash: Mapped[str] = mapped_column(String(64), index=True, default="")
+    enabled: Mapped[int] = mapped_column(Integer, default=1)
+    hit_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_hit_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    is_deleted: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class UserMemoryState(Base):
+    """用户记忆抽取水位线：每 (租户, 用户, 应用) 一行。"""
+
+    __tablename__ = "ap_user_memory_state"
+    __table_args__ = (UniqueConstraint("tenant_code", "user_key", "app_uuid", name="uk_ap_user_memory_state"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    tenant_code: Mapped[str] = mapped_column(String(64), index=True, default="")
+    app_uuid: Mapped[str] = mapped_column(String(64), index=True, default="")
+    user_key: Mapped[str] = mapped_column(String(128), index=True)
+    last_message_id: Mapped[int] = mapped_column(Integer, default=0)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)

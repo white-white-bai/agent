@@ -52,7 +52,7 @@ docker compose down                 # 停止（-v 连数据卷一起清）
 - 引擎链路：`graph/schema.py::GraphDef`（pydantic，逐类节点 config 校验）→ `engine/builder.py::build_graph` → `engine/runtime.py`（`astream_events` v2）。节点集中在 `engine/nodes.py`，模板/表达式在 `engine/expr.py`（Jinja2）。
 - `engine/context.py::EngineContext` 是引擎唯一依赖注入点（llm/retriever/tools/tracer 全是 Protocol），测试用 `app.dependency_overrides` 替换 `api/deps.py::get_engine_context`。
 - `api/services.py` 是所有 ORM 读写的唯一出口；`core/db.py::session_scope()` 提交后关闭，`sessionmaker(expire_on_commit=False)` 使脱管对象在 scope 外仍可读。
-- **默认关闭开关是本仓库的核心约定**：护栏、幂等、并发上限、管理端鉴权、历史窗口、历史摘要全部默认 `false`/`0`，关闭时输出与改造前逐字节一致。新能力一律「配置开启才生效」，不要改变默认路径。
+- **默认关闭开关是本仓库的核心约定**：护栏、幂等、并发上限、管理端鉴权、历史窗口、历史摘要、MCP 工具发现（`AP_TOOL_DISCOVERY_ENABLED`）、checkpointer（`AP_CHECKPOINTER_ENABLED`）、人在环（`AP_HITL_ENABLED`）、动态子图（`AP_SUBGRAPH_ENABLED`）、用户级长期记忆（`AP_USER_MEMORY_*`）全部默认 `false`/`0`，关闭时输出与改造前逐字节一致。`autonomous` agent 模式也只在智能体/节点显式选择时启用。新能力一律「配置开启才生效」，不要改变默认路径。
 - 配置唯一来源：`core/config.py::Settings`（pydantic-settings，`AP_` 前缀）；改配置必须同步 `.env.example`。管理端只读回显 `GET /admin/providers`、`GET /admin/guard/config`。
 - checkpointer 是自研 MySQL `BaseCheckpointSaver`（`checkpoint/mysql.py` → `ap_checkpoint*` 表）；会话历史在 `ap_message`，靠 `thread_id` 协同。
 - `sql/` 下迁移脚本**人工执行**，无自动迁移框架；MySQL 8 不支持 `ADD COLUMN IF NOT EXISTS`，老库加列必须按 `migrate_history_summary.sql` 的 `information_schema.COLUMNS` 存储过程守卫写法。

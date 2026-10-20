@@ -39,6 +39,13 @@ def _type_ok(kind: str, value: Any) -> bool:
     return True
 
 
+def _required(spec: dict[str, Any]) -> bool:
+    value = spec.get("required")
+    if isinstance(value, str):
+        return value.strip().lower() in _TRUE
+    return bool(value)
+
+
 def validate_args(params: list[dict[str, Any]] | None, args: dict[str, Any]) -> list[str]:
     """按声明的参数 schema 校验，返回错误清单（空表示通过）。"""
     errors: list[str] = []
@@ -50,7 +57,7 @@ def validate_args(params: list[dict[str, Any]] | None, args: dict[str, Any]) -> 
             continue
         value = args.get(name)
         if value is None or value == "":
-            if spec.get("required"):
+            if _required(spec):
                 errors.append(f"缺少必填参数 {name}")
             continue
         kind = str(spec.get("type") or "string").lower()

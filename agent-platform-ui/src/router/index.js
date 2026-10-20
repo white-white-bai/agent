@@ -46,6 +46,18 @@ export const MENU_PAGES = [
     meta: { title: '知识库', icon: 'Notebook', permission: 'knowledge:read' },
   },
   {
+    path: '/memory',
+    name: 'memory',
+    component: () => import('@/views/MemoryView.vue'),
+    meta: { title: '用户记忆', icon: 'Collection', permission: 'memory:read' },
+  },
+  {
+    path: '/runs',
+    name: 'runs',
+    component: () => import('@/views/RunsView.vue'),
+    meta: { title: '运行记录', icon: 'VideoPlay', permission: 'graph:read' },
+  },
+  {
     path: '/guards',
     name: 'guards',
     component: () => import('@/views/GuardsView.vue'),

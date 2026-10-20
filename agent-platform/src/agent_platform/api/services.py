@@ -17,11 +17,12 @@ from agent_platform.domain.models import (
     McpServer,
     Message,
     PromptTemplate,
+    Run,
     SensitiveWord,
     Tool,
 )
 from agent_platform.engine.context import LLMInvoker
-from agent_platform.graph.schema import GraphDef
+from agent_platform.graph.schema import GraphDef, NodeType, SubgraphRef
 
 logger = logging.getLogger("agent_platform.memory")
 
@@ -213,7 +214,8 @@ def publish_draft(
         payload = definition if definition is not None else (graph.draft or {})
         if not payload:
             return None
-        GraphDef.model_validate(payload)
+        graph_def = GraphDef.model_validate(payload)
+        validate_subgraph_refs(graph_def, tenant_code)
         version = GraphVersion(
             uuid=_new_uuid(),
             graph_uuid=graph.uuid,
@@ -267,6 +269,254 @@ def get_published_graph(app_uuid: str) -> GraphDef | None:
         if version is None:
             return None
         return GraphDef.model_validate(version.definition)
+
+
+# --------------------------------------------------------------------------- 动态子图
+
+def _visible_app(session: Any, app_uuid: str, tenant_code: str) -> App | None:
+    app = session.scalar(select(App).where(App.uuid == app_uuid, App.is_deleted == 0))
+    if app is None:
+        return None
+    if tenant_code and app.tenant_code and app.tenant_code != tenant_code:
+        return None
+    return app
+
+
+def _published_version_number(app_uuid: str, tenant_code: str) -> int | None:
+    with session_scope() as session:
+        if _visible_app(session, app_uuid, tenant_code) is None:
+            return None
+        graph = session.scalar(select(Graph).where(Graph.app_uuid == app_uuid))
+        if graph is None or graph.published_version_id is None:
+            return None
+        version = session.get(GraphVersion, graph.published_version_id)
+        return int(version.version) if version is not None else None
+
+
+def resolve_subgraph(ref: SubgraphRef, tenant_code: str = "") -> GraphDef | None:
+    """解析子图引用：内置模板或同租户应用的指定/当前发布版本。"""
+    if ref.template_key:
+        from agent_platform.api import graph_templates
+
+        template = graph_templates.get_template(ref.template_key)
+        if template is None:
+            return None
+        return GraphDef.model_validate(template["definition"])
+    if not ref.app_uuid:
+        return None
+    with session_scope() as session:
+        if _visible_app(session, ref.app_uuid, tenant_code) is None:
+            return None
+        graph = session.scalar(select(Graph).where(Graph.app_uuid == ref.app_uuid))
+        if graph is None:
+            return None
+        if ref.version is not None:
+            version = session.scalar(
+                select(GraphVersion).where(
+                    GraphVersion.graph_uuid == graph.uuid,
+                    GraphVersion.version == ref.version,
+                )
+            )
+        else:
+            if graph.published_version_id is None:
+                return None
+            version = session.get(GraphVersion, graph.published_version_id)
+        if version is None:
+            return None
+        return GraphDef.model_validate(version.definition)
+
+
+def _subgraph_refs(config: Any) -> list[SubgraphRef]:
+    refs = list(config.candidates or [])
+    if not refs and (config.app_uuid or config.template_key):
+        refs = [SubgraphRef(app_uuid=config.app_uuid, template_key=config.template_key, version=config.version)]
+    return refs
+
+
+def validate_subgraph_refs(
+    graph_def: GraphDef,
+    tenant_code: str = "",
+    *,
+    depth: int = 0,
+    visited: set[tuple[str, int | None, str]] | None = None,
+    max_depth: int | None = None,
+) -> None:
+    """发布/运行前递归校验子图引用：存在、同租户、无环、深度受限。"""
+    from agent_platform.core.config import get_settings
+
+    visited = set(visited or set())
+    settings = get_settings()
+    limit = int(max_depth or settings.subgraph_max_depth or 2)
+    for node in graph_def.nodes:
+        if node.type != NodeType.SUBGRAPH:
+            continue
+        if not settings.subgraph_enabled:
+            raise ValueError("子图功能未启用（AP_SUBGRAPH_ENABLED=false）")
+        config = node.typed_config()
+        refs = _subgraph_refs(config)
+        if not refs:
+            raise ValueError(f"子图节点 {node.id} 未配置引用")
+        if depth >= limit:
+            raise ValueError(f"子图嵌套超过上限 {limit}")
+        for ref in refs:
+            key = (ref.app_uuid, ref.version, ref.template_key)
+            if key in visited:
+                raise ValueError(f"子图引用成环：{ref.app_uuid or ref.template_key}")
+            child = resolve_subgraph(ref, tenant_code)
+            if child is None:
+                raise ValueError(f"子图不存在或不可见：{ref.app_uuid or ref.template_key}")
+            validate_subgraph_refs(
+                child,
+                tenant_code,
+                depth=depth + 1,
+                visited=visited | {key},
+                max_depth=limit,
+            )
+
+
+def pin_subgraph_refs(graph_def: GraphDef, tenant_code: str = "") -> GraphDef:
+    """把未钉版本的 app 子图引用解析成当前发布版号，保证 resume 可复现。"""
+    for node in graph_def.nodes:
+        if node.type != NodeType.SUBGRAPH:
+            continue
+        config = node.typed_config()
+        refs = _subgraph_refs(config)
+        for ref in refs:
+            if ref.template_key or not ref.app_uuid or ref.version is not None:
+                continue
+            version = _published_version_number(ref.app_uuid, tenant_code)
+            if version is not None:
+                ref.version = version
+        if config.candidates:
+            config.candidates = refs
+        elif refs:
+            config.app_uuid = refs[0].app_uuid
+            config.template_key = refs[0].template_key
+            config.version = refs[0].version
+        node.config = config.model_dump(mode="json")
+    return graph_def
+
+
+def list_subgraph_options(tenant_code: str = "") -> dict[str, Any]:
+    from agent_platform.api import graph_templates
+
+    apps: list[dict[str, Any]] = []
+    with session_scope() as session:
+        stmt = (
+            select(Graph, App)
+            .join(App, App.uuid == Graph.app_uuid)
+            .where(App.is_deleted == 0)
+        )
+        if tenant_code:
+            stmt = stmt.where(App.tenant_code == tenant_code)
+        for graph, app in session.execute(stmt).all():
+            latest = None
+            if graph.published_version_id is not None:
+                version = session.get(GraphVersion, graph.published_version_id)
+                latest = version.version if version is not None else None
+            apps.append(
+                {
+                    "app_uuid": app.uuid,
+                    "app_name": app.app_name or app.app_id,
+                    "tenant_code": app.tenant_code,
+                    "version": latest,
+                    "status": graph.status,
+                }
+            )
+    return {
+        "apps": apps,
+        "templates": [
+            {"template_key": item["key"], "name": item["name"], "description": item["description"]}
+            for item in graph_templates.list_templates()
+        ],
+    }
+
+
+# --------------------------------------------------------------------------- 运行记录（HITL）
+
+def create_run(
+    *,
+    tenant_code: str,
+    app_uuid: str,
+    thread_id: str,
+    graph_definition: dict[str, Any],
+    created_by: str = "",
+) -> Run:
+    with session_scope() as session:
+        row = session.scalar(select(Run).where(Run.thread_id == thread_id))
+        if row is None:
+            row = Run(
+                uuid=_new_uuid(),
+                tenant_code=tenant_code,
+                app_uuid=app_uuid,
+                thread_id=thread_id,
+                status="running",
+                graph_definition=graph_definition,
+                interrupt_payload={},
+                created_by=created_by,
+            )
+            session.add(row)
+            session.flush()
+            return row
+        row.tenant_code = tenant_code
+        row.app_uuid = app_uuid
+        row.graph_definition = graph_definition
+        row.status = "running"
+        row.interrupt_payload = {}
+        row.created_by = created_by or row.created_by
+        session.flush()
+        return row
+
+
+def get_run(thread_id: str, tenant_code: str = "") -> Run | None:
+    with session_scope() as session:
+        row = session.scalar(select(Run).where(Run.thread_id == thread_id))
+    if row is None:
+        return None
+    if tenant_code and row.tenant_code and row.tenant_code != tenant_code:
+        return None
+    return row
+
+
+def list_runs(
+    tenant_code: str = "",
+    *,
+    app_uuid: str = "",
+    status: str = "",
+    limit: int = 50,
+) -> list[Run]:
+    with session_scope() as session:
+        stmt = select(Run)
+        if tenant_code:
+            stmt = stmt.where(Run.tenant_code == tenant_code)
+        if app_uuid:
+            stmt = stmt.where(Run.app_uuid == app_uuid)
+        if status:
+            stmt = stmt.where(Run.status == status)
+        return list(
+            session.scalars(stmt.order_by(Run.id.desc()).limit(max(int(limit or 50), 1))).all()
+        )
+
+
+def update_run(
+    thread_id: str,
+    *,
+    status: str | None = None,
+    interrupt_payload: dict[str, Any] | None = None,
+    graph_definition: dict[str, Any] | None = None,
+) -> Run | None:
+    with session_scope() as session:
+        row = session.scalar(select(Run).where(Run.thread_id == thread_id))
+        if row is None:
+            return None
+        if status is not None:
+            row.status = status
+        if interrupt_payload is not None:
+            row.interrupt_payload = interrupt_payload
+        if graph_definition is not None:
+            row.graph_definition = graph_definition
+        session.flush()
+        return row
 
 
 # --------------------------------------------------------------------------- 会话 / 消息

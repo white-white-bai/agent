@@ -4,16 +4,19 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import AsyncIterator
+from datetime import datetime
 from pathlib import PurePath
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
+from langgraph.types import Command
 from pydantic import ValidationError
 
 from agent_platform.api import graph_templates, services
 from agent_platform.api.deps import (
     build_request_tracer,
+    get_checkpointer,
     get_current_admin,
     get_engine_context,
     require_admin,
@@ -31,6 +34,7 @@ from agent_platform.api.schemas import (
     GraphRollbackRequest,
     McpServerCreateRequest,
     PromptUpsertRequest,
+    ResumeRunRequest,
     RetrieveRequest,
     RunGraphRequest,
     RunNodeRequest,
@@ -38,16 +42,22 @@ from agent_platform.api.schemas import (
     SensitiveWordCreateRequest,
     ToolTestRequest,
     ToolUpsertRequest,
+    UserMemoryPurgeRequest,
+    UserMemoryRecallRequest,
+    UserMemoryUpsertRequest,
 )
 from agent_platform.api.uploads import read_document, read_upload
 from agent_platform.core import metrics
 from agent_platform.core.accounts import AdminPrincipal
 from agent_platform.core.config import get_settings
+from agent_platform.engine.builder import build_graph
 from agent_platform.engine.context import EngineContext
 from agent_platform.engine.runtime import run_node, stream_graph
 from agent_platform.graph.schema import AGENT_MODES, GraphDef
 from agent_platform.importer import DifyImportError, convert, parse_dsl
 from agent_platform.knowledge.embeddings import Embedder
+from agent_platform.memory import recall as memory_recall
+from agent_platform.memory import store as memory_store
 from agent_platform.tools.mcp_bridge import call_declared_tool
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
@@ -155,6 +165,13 @@ def get_graph_template(template_key: str) -> dict[str, Any]:
     return {"data": template}
 
 
+@router.get("/graphs", dependencies=[Depends(require_permission("graph:read"))])
+def list_graphs(
+    tenant_code: str = "", principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
+    return {"data": services.list_subgraph_options(_tenant(principal, tenant_code))}
+
+
 @router.get("/apps/{app_uuid}/graph", dependencies=[Depends(require_permission("graph:read"))])
 def get_graph(app_uuid: str) -> dict[str, Any]:
     definition = services.get_draft(app_uuid)
@@ -178,9 +195,14 @@ def save_graph_draft(app_uuid: str, request: GraphDraftRequest) -> dict[str, Any
 
 @router.post("/apps/{app_uuid}/graph/publish", dependencies=[Depends(require_permission("graph:write"))])
 def publish_graph(app_uuid: str, request: GraphPublishRequest) -> dict[str, Any]:
+    app_row = services.get_app_by_uuid(app_uuid)
     try:
         version = services.publish_draft(
-            app_uuid, note=request.note, created_by=request.created_by, definition=request.definition
+            app_uuid,
+            tenant_code=app_row.tenant_code if app_row is not None else "",
+            note=request.note,
+            created_by=request.created_by,
+            definition=request.definition,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"图定义非法: {exc}") from exc
@@ -686,6 +708,185 @@ async def retrieve_dataset(
     return {"data": {"query": request.query, "top_k": top_k, "hits": hits}}
 
 
+# --------------------------------------------------------------------------- 用户级长期记忆
+
+def _memory_dict(row: Any) -> dict[str, Any]:
+    return {
+        "uuid": row.uuid,
+        "tenant_code": row.tenant_code,
+        "app_uuid": row.app_uuid,
+        "user_key": row.user_key,
+        "user_name": row.user_name,
+        "kind": row.kind,
+        "content": row.content,
+        "importance": float(row.importance or 0),
+        "enabled": int(row.enabled or 0),
+        "hit_count": int(row.hit_count or 0),
+        "last_hit_at": _iso(row.last_hit_at),
+        "expires_at": _iso(row.expires_at),
+        "source_conversation_id": row.source_conversation_id,
+        "source_message_id": row.source_message_id,
+        "created_at": _iso(row.created_at),
+        "updated_at": _iso(row.updated_at),
+    }
+
+
+def _parse_expires_at(raw: str) -> datetime | None:
+    if not raw or not raw.strip():
+        return None
+    try:
+        return datetime.fromisoformat(raw.strip().replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="expires_at 不是合法 ISO 时间") from exc
+
+
+@router.get("/user-memories", dependencies=[Depends(require_permission("memory:read"))])
+def list_user_memories(
+    tenant_code: str = "",
+    user_key: str = "",
+    app_uuid: str = "",
+    q: str = "",
+    page: int = 1,
+    size: int = 20,
+    principal: AdminPrincipal = Depends(get_current_admin),
+) -> dict[str, Any]:
+    tenant = _tenant(principal, tenant_code)
+    rows, total = memory_store.list_memories(
+        tenant, user_key=user_key, app_uuid=app_uuid, query=q, page=page, size=size
+    )
+    return {"data": {"items": [_memory_dict(row) for row in rows], "total": total, "page": page, "size": size}}
+
+
+@router.get("/user-memories/users", dependencies=[Depends(require_permission("memory:read"))])
+def list_user_memory_users(
+    tenant_code: str = "",
+    app_uuid: str = "",
+    limit: int = 100,
+    principal: AdminPrincipal = Depends(get_current_admin),
+) -> dict[str, Any]:
+    return {
+        "data": memory_store.list_memory_users(
+            _tenant(principal, tenant_code), app_uuid=app_uuid, limit=limit
+        )
+    }
+
+
+@router.post("/user-memories", dependencies=[Depends(require_permission("memory:write"))])
+async def create_user_memory(
+    request: UserMemoryUpsertRequest, principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
+    if not request.user_key.strip():
+        raise HTTPException(status_code=400, detail="user_key 不能为空")
+    if not request.content.strip():
+        raise HTTPException(status_code=400, detail="content 不能为空")
+    settings = get_settings()
+    tenant = _tenant(principal, request.tenant_code)
+    embedding = await Embedder(settings).encode(request.content.strip())
+    row = memory_store.upsert_memory(
+        tenant_code=tenant,
+        app_uuid=request.app_uuid,
+        user_key=request.user_key,
+        user_name=request.user_name,
+        kind=request.kind,
+        content=request.content,
+        importance=request.importance,
+        embedding=embedding,
+        embedding_model=memory_store.embedding_model_name(settings),
+        expires_at=_parse_expires_at(request.expires_at),
+        settings=settings,
+    )
+    return {"data": _memory_dict(row)}
+
+
+@router.put("/user-memories/{memory_uuid}", dependencies=[Depends(require_permission("memory:write"))])
+async def update_user_memory(
+    memory_uuid: str,
+    request: UserMemoryUpsertRequest,
+    principal: AdminPrincipal = Depends(get_current_admin),
+) -> dict[str, Any]:
+    settings = get_settings()
+    current = memory_store.get_memory(memory_uuid, principal.tenant_code)
+    if current is None:
+        raise HTTPException(status_code=404, detail="记忆不存在")
+    embedding = None
+    if request.content is not None and request.content.strip() != (current.content or "").strip():
+        embedding = await Embedder(settings).encode(request.content.strip())
+    row = memory_store.update_memory(
+        memory_uuid,
+        tenant_code=principal.tenant_code,
+        content=request.content or None,
+        kind=request.kind or None,
+        importance=request.importance,
+        enabled=1 if request.enabled else 0,
+        embedding=embedding,
+        embedding_model=memory_store.embedding_model_name(settings) if embedding else "",
+        expires_at=_parse_expires_at(request.expires_at),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="记忆不存在")
+    return {"data": _memory_dict(row)}
+
+
+@router.delete("/user-memories/{memory_uuid}", dependencies=[Depends(require_permission("memory:write"))])
+def delete_user_memory(
+    memory_uuid: str, principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
+    if not memory_store.delete_memory(memory_uuid, principal.tenant_code):
+        raise HTTPException(status_code=404, detail="记忆不存在")
+    return {"data": {"uuid": memory_uuid, "is_deleted": 1}}
+
+
+@router.post("/user-memories/recall", dependencies=[Depends(require_permission("memory:read"))])
+async def recall_user_memories(
+    request: UserMemoryRecallRequest, principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
+    settings = get_settings()
+    if not request.user_key.strip() or not request.query.strip():
+        raise HTTPException(status_code=400, detail="user_key 与 query 不能为空")
+    hits = await memory_recall.recall(
+        settings,
+        tenant_code=_tenant(principal, request.tenant_code),
+        app_uuid=request.app_uuid,
+        user_key=request.user_key,
+        query=request.query,
+        top_k=request.top_k,
+        score_threshold=request.score_threshold,
+    )
+    return {"data": {"query": request.query, "hits": hits}}
+
+
+@router.post("/user-memories/purge", dependencies=[Depends(require_permission("memory:write"))])
+def purge_user_memories(
+    request: UserMemoryPurgeRequest, principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
+    if not request.user_key.strip():
+        raise HTTPException(status_code=400, detail="user_key 不能为空")
+    deleted = memory_store.purge_user(
+        _tenant(principal, request.tenant_code), request.user_key, request.app_uuid
+    )
+    return {"data": {"user_key": request.user_key, "deleted": deleted}}
+
+
+@router.get("/memory/config", dependencies=[Depends(require_permission("memory:read"))])
+def get_memory_config() -> dict[str, Any]:
+    settings = get_settings()
+    return {
+        "data": {
+            "enabled": settings.user_memory_enabled,
+            "write_enabled": settings.user_memory_write_enabled,
+            "recall_enabled": settings.user_memory_recall_enabled,
+            "provider": settings.user_memory_provider,
+            "max_chars": settings.user_memory_max_chars,
+            "top_k": settings.user_memory_top_k,
+            "score_threshold": settings.user_memory_score_threshold,
+            "mode": settings.user_memory_mode,
+            "scope": settings.user_memory_scope,
+            "max_per_user": settings.user_memory_max_per_user,
+            "ttl_days": settings.user_memory_ttl_days,
+        }
+    }
+
+
 # --------------------------------------------------------------------------- 模型 / 检索 provider
 
 @router.get("/providers", dependencies=[Depends(require_permission("provider:read"))])
@@ -1001,6 +1202,20 @@ def _resolve_run_definition(app_uuid: str, definition: dict[str, Any] | None) ->
         raise HTTPException(status_code=400, detail=f"图定义非法: {exc}") from exc
 
 
+def _run_dict(row: Any) -> dict[str, Any]:
+    return {
+        "uuid": row.uuid,
+        "tenant_code": row.tenant_code,
+        "app_uuid": row.app_uuid,
+        "thread_id": row.thread_id,
+        "status": row.status,
+        "interrupt_payload": row.interrupt_payload or {},
+        "created_by": row.created_by,
+        "created_at": _iso(row.created_at),
+        "updated_at": _iso(row.updated_at),
+    }
+
+
 @router.post("/apps/{app_uuid}/graph/run-node", dependencies=[Depends(require_permission("graph:write"))])
 async def run_graph_node(
     app_uuid: str,
@@ -1013,6 +1228,10 @@ async def run_graph_node(
     if app_row is None:
         raise HTTPException(status_code=404, detail="应用不存在")
     graph_def = _resolve_run_definition(app_uuid, request.definition)
+    try:
+        services.validate_subgraph_refs(graph_def, app_row.tenant_code)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if graph_def.node(request.node_id) is None:
         raise HTTPException(status_code=404, detail="节点不存在")
     ctx.tenant_code = app_row.tenant_code
@@ -1043,22 +1262,167 @@ async def run_graph_stream(
     if app_row is None:
         raise HTTPException(status_code=404, detail="应用不存在")
     graph_def = _resolve_run_definition(app_uuid, request.definition)
+    try:
+        services.validate_subgraph_refs(graph_def, app_row.tenant_code)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     ctx.tenant_code = app_row.tenant_code
+    settings = get_settings()
+    hitl = bool(settings.hitl_enabled)
+    thread_id = request.thread_id or (uuid.uuid4().hex if hitl else "")
+    if hitl:
+        graph_def = services.pin_subgraph_refs(graph_def, app_row.tenant_code)
+        ctx.hitl_enabled = True
+        services.create_run(
+            tenant_code=app_row.tenant_code,
+            app_uuid=app_uuid,
+            thread_id=thread_id,
+            graph_definition=graph_def.model_dump(mode="json"),
+            created_by=principal.username,
+        )
     tracer = build_request_tracer(
         principal.username,
-        {"app_id": app_row.app_id, "source": "editor-graph-run"},
+        {"app_id": app_row.app_id, "source": "editor-graph-run", "thread_id": thread_id},
         name="graph-run",
     )
     ctx.tracer = tracer
 
     async def _events() -> AsyncIterator[str]:
+        status = "completed"
         try:
-            async for item in stream_graph(graph_def, request.inputs, ctx):
+            kwargs: dict[str, Any] = {}
+            if hitl:
+                kwargs = {
+                    "checkpointer": get_checkpointer(),
+                    "thread_id": thread_id,
+                    "allow_interrupt": True,
+                }
+            async for item in stream_graph(graph_def, request.inputs, ctx, **kwargs):
+                if hitl and item.get("type") == "interrupt":
+                    status = "interrupted"
+                    services.update_run(thread_id, status=status, interrupt_payload=item)
+                elif hitl and item.get("type") == "error":
+                    status = "failed"
                 yield f"data: {json.dumps(item, ensure_ascii=False, default=str)}\n\n"
         except Exception as exc:  # noqa: BLE001 - 流式接口要把错误作为事件回传，不能直接抛
+            if hitl:
+                services.update_run(thread_id, status="failed")
             payload = {"type": "error", "message": str(exc)}
             yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
         finally:
+            if hitl and status == "completed":
+                services.update_run(thread_id, status="completed")
+            tracer.flush()
+
+    return StreamingResponse(
+        _events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get("/runs", dependencies=[Depends(require_permission("graph:read"))])
+def list_runs(
+    tenant_code: str = "",
+    app_uuid: str = "",
+    status: str = "",
+    limit: int = 50,
+    principal: AdminPrincipal = Depends(get_current_admin),
+) -> dict[str, Any]:
+    rows = services.list_runs(
+        _tenant(principal, tenant_code), app_uuid=app_uuid, status=status, limit=limit
+    )
+    return {"data": [_run_dict(row) for row in rows]}
+
+
+@router.get("/runs/{thread_id}", dependencies=[Depends(require_permission("graph:read"))])
+async def get_run_detail(
+    thread_id: str,
+    ctx: EngineContext = Depends(get_engine_context),
+    principal: AdminPrincipal = Depends(get_current_admin),
+) -> dict[str, Any]:
+    run = services.get_run(thread_id, principal.scope_tenant())
+    if run is None:
+        raise HTTPException(status_code=404, detail="运行记录不存在")
+    try:
+        graph_def = GraphDef.model_validate(run.graph_definition or {})
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=f"运行图定义非法: {exc}") from exc
+    ctx.tenant_code = run.tenant_code
+    snapshot = await build_graph(graph_def, ctx, get_checkpointer()).aget_state(
+        {"configurable": {"thread_id": thread_id}}
+    )
+    return {
+        "data": {
+            **_run_dict(run),
+            "state": snapshot.values,
+            "next": list(snapshot.next),
+            "interrupts": [
+                {"id": item.id, "value": item.value} for item in snapshot.interrupts
+            ],
+        }
+    }
+
+
+@router.post("/runs/{thread_id}/resume", dependencies=[Depends(require_permission("graph:write"))])
+async def resume_run(
+    thread_id: str,
+    request: ResumeRunRequest,
+    ctx: EngineContext = Depends(get_engine_context),
+    principal: AdminPrincipal = Depends(get_current_admin),
+) -> StreamingResponse:
+    run = services.get_run(thread_id, principal.scope_tenant())
+    if run is None:
+        raise HTTPException(status_code=404, detail="运行记录不存在")
+    if run.status != "interrupted":
+        raise HTTPException(status_code=409, detail="当前运行不在等待审批状态")
+    raw_definition = run.graph_definition or request.definition or {}
+    try:
+        graph_def = GraphDef.model_validate(raw_definition)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=f"运行图定义非法: {exc}") from exc
+    ctx.tenant_code = run.tenant_code
+    ctx.hitl_enabled = True
+    payload = {"action": request.action, **request.payload}
+    interrupt_id = request.interrupt_id
+    if not interrupt_id:
+        pending = (run.interrupt_payload or {}).get("interrupts") or []
+        if pending:
+            interrupt_id = str(pending[0].get("id") or "")
+    resume_value = {interrupt_id: payload} if interrupt_id else payload
+    command = Command(resume=resume_value)
+    tracer = build_request_tracer(
+        principal.username,
+        {"app_id": run.app_uuid, "source": "editor-graph-resume", "thread_id": thread_id},
+        name="graph-resume",
+    )
+    ctx.tracer = tracer
+
+    async def _events() -> AsyncIterator[str]:
+        status = "completed"
+        try:
+            async for item in stream_graph(
+                graph_def,
+                {},
+                ctx,
+                checkpointer=get_checkpointer(),
+                thread_id=thread_id,
+                resume=command,
+                allow_interrupt=True,
+            ):
+                if item.get("type") == "interrupt":
+                    status = "interrupted"
+                    services.update_run(thread_id, status=status, interrupt_payload=item)
+                elif item.get("type") == "error":
+                    status = "failed"
+                yield f"data: {json.dumps(item, ensure_ascii=False, default=str)}\n\n"
+        except Exception as exc:  # noqa: BLE001
+            services.update_run(thread_id, status="failed")
+            payload = {"type": "error", "message": str(exc)}
+            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        finally:
+            if status == "completed":
+                services.update_run(thread_id, status="completed")
             tracer.flush()
 
     return StreamingResponse(

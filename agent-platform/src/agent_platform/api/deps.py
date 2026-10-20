@@ -22,6 +22,12 @@ def get_engine_context() -> EngineContext:
     return build_engine_context(get_settings())
 
 
+def get_checkpointer() -> Any:
+    from agent_platform.checkpoint.mysql import MySQLCheckpointSaver
+
+    return MySQLCheckpointSaver()
+
+
 def get_guard_chain() -> GuardChain:
     return GuardChain(get_settings())
 

@@ -33,6 +33,7 @@ BUILTIN_ROLES: dict[str, dict[str, object]] = {
             "guard:read", "guard:write",
             "mcp:read", "mcp:write",
             "knowledge:read", "knowledge:write",
+            "memory:read", "memory:write",
             "agent:read", "agent:write",
             "tool:read", "tool:write",
             "prompt:read", "prompt:write",
@@ -45,6 +46,7 @@ BUILTIN_ROLES: dict[str, dict[str, object]] = {
         "permissions": [
             "app:read", "graph:read", "guard:read", "mcp:read", "knowledge:read", "user:read", "role:read",
             "agent:read", "tool:read", "prompt:read",
+            "memory:read",
             "provider:read",
             "metrics:read",
         ],

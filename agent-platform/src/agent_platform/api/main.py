@@ -1,6 +1,7 @@
 """FastAPI 入口。"""
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -12,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from agent_platform.api import accounts, admin, compat, compat_api, services
 from agent_platform.api.deps import (
     build_request_tracer,
+    get_checkpointer,
     get_concurrency_limiter,
     get_engine_context,
     get_guard_chain,
@@ -28,6 +30,11 @@ from agent_platform.core.idempotency import IdempotencyStore
 from agent_platform.core.security import AuthError, resolve_api_key
 from agent_platform.engine.context import EngineContext
 from agent_platform.engine.runtime import stream_graph
+from agent_platform.memory import recall as memory_recall
+from agent_platform.memory.extract import dispatch_extract
+from agent_platform.memory.store import normalize_user_key
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -155,10 +162,35 @@ async def _chat_stream(
             inputs["history"] = history
         if summary:
             inputs["summary"] = summary
+        user_key = normalize_user_key(request.user)
+        if settings.user_memory_enabled:
+            # 服务端最后写入，防客户端伪造同名输入
+            inputs.pop("user_memory", None)
+            inputs.pop(settings.user_memory_inject_var, None)
+            if settings.user_memory_recall_enabled and user_key:
+                try:
+                    memories = await memory_recall.recall(
+                        settings,
+                        tenant_code=app_record.tenant_code,
+                        app_uuid=app_record.uuid,
+                        user_key=user_key,
+                        query=request.query,
+                        top_k=settings.user_memory_top_k,
+                        score_threshold=settings.user_memory_score_threshold,
+                    )
+                except Exception:
+                    logger.warning("用户记忆召回失败", exc_info=True)
+                    memories = []
+                if memories:
+                    inputs["user_memory"] = memories
+                    inputs[settings.user_memory_inject_var] = memory_recall.render_memory_text(memories)
         answer = ""
         resources: list[dict] = []
+        stream_kwargs: dict[str, Any] = {"thread_id": conversation.conversation_id}
+        if settings.checkpointer_enabled:
+            stream_kwargs["checkpointer"] = get_checkpointer()
         try:
-            async for item in stream_graph(graph_def, inputs, ctx, thread_id=conversation.conversation_id):
+            async for item in stream_graph(graph_def, inputs, ctx, **stream_kwargs):
                 if item["type"] == "token":
                     answer += item["content"]
                     yield compat.sse(
@@ -185,6 +217,18 @@ async def _chat_stream(
             metadata={"retriever_resources": trimmed},
             message_id=message_id,
         )
+        if settings.user_memory_enabled and settings.user_memory_write_enabled and user_key:
+            try:
+                await dispatch_extract(
+                    settings,
+                    tenant_code=app_record.tenant_code,
+                    app_uuid=app_record.uuid,
+                    user_key=user_key,
+                    conversation_uuid=conversation.uuid,
+                    llm=ctx.llm,
+                )
+            except Exception:
+                logger.warning("用户记忆写入派发失败", exc_info=True)
         if idempotency is not None and idem_key:
             idempotency.complete(
                 idem_key,

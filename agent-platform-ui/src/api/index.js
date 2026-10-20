@@ -32,6 +32,13 @@ export const importGraphFile = (uuid, formData) =>
 export const runNode = (uuid, body) => request(`/admin/apps/${uuid}/graph/run-node`, { method: 'POST', body })
 export const runGraphStream = (uuid, body, onEvent, options) =>
   streamRequest(`/admin/apps/${uuid}/graph/run`, body, onEvent, options)
+export const listGraphOptions = (params) => request('/admin/graphs', { params })
+
+// HITL 运行记录
+export const listRuns = (params) => request('/admin/runs', { params })
+export const getRun = (threadId) => request(`/admin/runs/${threadId}`)
+export const resumeRun = (threadId, body, onEvent, options) =>
+  streamRequest(`/admin/runs/${threadId}/resume`, body, onEvent, options)
 
 // 护栏：敏感词 + 进程级开关
 export const listSensitiveWords = (params) => request('/admin/sensitive-words', { params })
@@ -89,6 +96,16 @@ export const getGraphTemplate = (key) => request(`/admin/graph/templates/${key}`
 // 模型 / 检索 provider
 export const listProviders = () => request('/admin/providers')
 export const getRetrievalConfig = () => request('/admin/retrieval/config')
+
+// 用户级长期记忆
+export const getMemoryConfig = () => request('/admin/memory/config')
+export const listUserMemories = (params) => request('/admin/user-memories', { params })
+export const listMemoryUsers = (params) => request('/admin/user-memories/users', { params })
+export const createUserMemory = (body) => request('/admin/user-memories', { method: 'POST', body })
+export const updateUserMemory = (uuid, body) => request(`/admin/user-memories/${uuid}`, { method: 'PUT', body })
+export const deleteUserMemory = (uuid) => request(`/admin/user-memories/${uuid}`, { method: 'DELETE' })
+export const recallUserMemory = (body) => request('/admin/user-memories/recall', { method: 'POST', body })
+export const purgeUserMemories = (body) => request('/admin/user-memories/purge', { method: 'POST', body })
 
 // 监控看板
 export const metricsOverview = (params) => request('/admin/metrics/overview', { params })

@@ -62,6 +62,18 @@ vi.mock('@/api', () => ({
   deletePrompt: vi.fn(async () => ({})),
   listGraphTemplates: vi.fn(async () => []),
   getGraphTemplate: vi.fn(async () => ({ definition: {} })),
+  listGraphOptions: vi.fn(async () => ({ apps: [], templates: [] })),
+  listRuns: vi.fn(async () => []),
+  getRun: vi.fn(async () => ({})),
+  resumeRun: vi.fn(async () => ({})),
+  getMemoryConfig: vi.fn(async () => ({ enabled: false, write_enabled: false, recall_enabled: false })),
+  listUserMemories: vi.fn(async () => ({ items: [], total: 0 })),
+  listMemoryUsers: vi.fn(async () => []),
+  createUserMemory: vi.fn(async () => ({})),
+  updateUserMemory: vi.fn(async () => ({})),
+  deleteUserMemory: vi.fn(async () => ({})),
+  recallUserMemory: vi.fn(async () => ({ hits: [] })),
+  purgeUserMemories: vi.fn(async () => ({ deleted: 0 })),
   metricsOverview: vi.fn(async () => ({})),
 }))
 
@@ -80,6 +92,8 @@ import MetricsView from '@/views/MetricsView.vue'
 import AgentsView from '@/views/AgentsView.vue'
 import ToolsView from '@/views/ToolsView.vue'
 import PromptsView from '@/views/PromptsView.vue'
+import MemoryView from '@/views/MemoryView.vue'
+import RunsView from '@/views/RunsView.vue'
 
 const flush = () => flushPromises()
 
@@ -361,5 +375,63 @@ describe('PromptsView', () => {
     expect(api.listPrompts).toHaveBeenCalled()
     expect(wrapper.text()).toContain('fewshot.gov_intent')
     expect(wrapper.text()).toContain('政务意图识别')
+  })
+})
+
+describe('MemoryView', () => {
+  it('renders the read-only config and memory rows', async () => {
+    api.getMemoryConfig.mockResolvedValueOnce({
+      enabled: true,
+      write_enabled: true,
+      recall_enabled: true,
+      scope: 'app',
+      top_k: 5,
+      max_per_user: 200,
+    })
+    api.listMemoryUsers.mockResolvedValueOnce([{ user_key: 'u1', count: 1 }])
+    api.listUserMemories.mockResolvedValueOnce({
+      items: [
+        {
+          uuid: 'm1',
+          user_key: 'u1',
+          app_uuid: 'a1',
+          kind: 'preference',
+          content: '喜欢简洁回答',
+          importance: 0.8,
+          hit_count: 0,
+          updated_at: '2026-10-20',
+        },
+      ],
+      total: 1,
+    })
+
+    const { wrapper } = await mountView(MemoryView)
+
+    expect(api.listUserMemories).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('喜欢简洁回答')
+    expect(wrapper.text()).toContain('新增记忆')
+    expect(wrapper.text()).toContain('总闸')
+  })
+})
+
+describe('RunsView', () => {
+  it('lists interrupted runs and offers approval for writers', async () => {
+    api.listRuns.mockResolvedValueOnce([
+      {
+        uuid: 'r1',
+        thread_id: 'thread-1',
+        status: 'interrupted',
+        app_uuid: 'a1',
+        created_by: 'admin',
+        created_at: '2026-10-20',
+      },
+    ])
+
+    const { wrapper } = await mountView(RunsView)
+
+    expect(api.listRuns).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('thread-1')
+    expect(wrapper.text()).toContain('interrupted')
+    expect(wrapper.text()).toContain('审批/恢复')
   })
 })

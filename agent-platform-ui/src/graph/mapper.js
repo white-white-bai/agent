@@ -2,7 +2,7 @@ import { toRaw } from 'vue'
 
 import { classifierPorts, conditionPorts, nodeMeta } from './nodeMeta'
 
-export const SCHEMA_VERSION = '1.0'
+export const SCHEMA_VERSION = '1.1'
 export const NODE_WIDTH = 176
 export const NODE_HEIGHT = 46
 export const DEFAULT_PORT = 'out'

@@ -17,7 +17,12 @@ class LLMInvoker(Protocol):
         user_prompt: str,
         temperature: float,
         max_tokens: int | None,
-    ) -> str: ...
+        messages: list[Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        return_message: bool = False,
+        tags: list[str] | None = None,
+    ) -> Any: ...
 
 
 class Retriever(Protocol):
@@ -71,6 +76,9 @@ class EngineContext:
     agents: AgentInvoker = field(default=_unavailable_agent_invoker)
     tenant_code: str = ""
     tracer: Any = None
+    hitl_enabled: bool = False
+    subgraph_enabled: bool = False
+    resolve_subgraph: Any = None
 
 
 EngineNodeFn = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]

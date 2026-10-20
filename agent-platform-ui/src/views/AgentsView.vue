@@ -10,7 +10,7 @@ const auth = useAuthStore()
 const filters = reactive({ tenant_code: '' })
 const { rows, loading, reload } = useTable(() => listAgents({ tenant_code: filters.tenant_code }))
 
-const MODES = ['react', 'plan_execute', 'reflection', 'supervisor', 'pipeline', 'agent_as_tool', 'deep_search']
+const MODES = ['react', 'autonomous', 'plan_execute', 'reflection', 'supervisor', 'pipeline', 'agent_as_tool', 'deep_search']
 const ROLES = ['intent', 'retrieval', 'generate', 'compliance', 'custom']
 
 const dialogVisible = ref(false)
@@ -218,7 +218,7 @@ async function remove(row) {
         <el-form-item label="temperature">
           <el-input-number v-model="form.temperature" :step="0.1" :min="0" :max="2" controls-position="right" />
         </el-form-item>
-        <el-form-item label="工具（JSON，ToolRef 数组）">
+        <el-form-item label="工具（JSON，ToolRef 数组；discover=true 时从该 server 的 MCP tools/list 发现）">
           <el-input v-model="form.tools" type="textarea" :rows="3" />
         </el-form-item>
         <el-form-item label="检索配置（JSON，deep_search 用）">

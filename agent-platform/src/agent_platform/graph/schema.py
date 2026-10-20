@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 
 
 class VarType(str, Enum):
@@ -43,6 +43,8 @@ class NodeType(str, Enum):
     VARIABLE_ASSIGNER = "variable-assigner"
     LIST_OPERATOR = "list-operator"
     AGENT = "agent"
+    APPROVAL = "approval"
+    SUBGRAPH = "subgraph"
 
 
 class Position(BaseModel):
@@ -113,6 +115,19 @@ class ToolRef(BaseModel):
     args: dict[str, Any] = Field(default_factory=dict)
     # 单个工具失败时的链路策略：raise 直接中断（默认），skip 跳过继续
     on_error: Literal["raise", "skip"] = "raise"
+    # True 时从该 server 的 MCP tools/list 发现工具（需开启 AP_TOOL_DISCOVERY_ENABLED）
+    discover: bool = False
+
+    @field_validator("discover", mode="before")
+    @classmethod
+    def _coerce_discover(cls, value: Any) -> Any:
+        # 前端 rows 表单可能传 "true"/"false"/""，空串表示不启用
+        if isinstance(value, str):
+            text = value.strip().lower()
+            if not text:
+                return False
+            return text in ("true", "1", "yes", "on")
+        return value
 
 
 class ToolConfig(BaseModel):
@@ -168,9 +183,10 @@ class TemplateTransformConfig(BaseModel):
     output_var: str = "output"
 
 
-# Agent 支持的 7 种工作模式
+# Agent 支持的 8 种工作模式
 AGENT_MODES = (
     "react",
+    "autonomous",
     "plan_execute",
     "reflection",
     "supervisor",
@@ -206,6 +222,61 @@ class AgentConfig(BaseModel):
             if not text:
                 return None
             return text in ("true", "1", "yes", "on")
+        return value
+
+
+class ApprovalConfig(BaseModel):
+    """人工审批节点：HITL 开启时 interrupt()，关闭时按默认动作自动通过。"""
+
+    question: str = "请确认是否继续执行"
+    options: list[str] = Field(default_factory=lambda: ["approve", "reject"])
+    payload: str = ""
+    output_var: str = "approval"
+    default_action: Literal["approve", "reject"] = "approve"
+
+
+class SubgraphRef(BaseModel):
+    app_uuid: str = ""
+    template_key: str = ""
+    version: int | None = None
+    label: str = ""
+
+    @field_validator("version", mode="before")
+    @classmethod
+    def _coerce_version(cls, value: Any) -> Any:
+        if value is None or value == "":
+            return None
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                return value
+        return value
+
+
+class SubgraphConfig(BaseModel):
+    """子图节点：单子图或候选子图；router 为空时按 state.route / 第一个候选选择。"""
+
+    app_uuid: str = ""
+    template_key: str = ""
+    version: int | None = None
+    candidates: list[SubgraphRef] = Field(default_factory=list)
+    router: str = ""
+    query: str = "{{ query }}"
+    inputs: list[CodeInput] = Field(default_factory=list)
+    output_var: str = "subgraph_result"
+    max_depth: int = 2
+
+    @field_validator("version", mode="before")
+    @classmethod
+    def _coerce_version(cls, value: Any) -> Any:
+        if value is None or value == "":
+            return None
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                return value
         return value
 
 
@@ -284,6 +355,8 @@ CONFIG_MODELS: dict[NodeType, type[BaseModel]] = {
     NodeType.VARIABLE_ASSIGNER: VariableAssignerConfig,
     NodeType.LIST_OPERATOR: ListOperatorConfig,
     NodeType.AGENT: AgentConfig,
+    NodeType.APPROVAL: ApprovalConfig,
+    NodeType.SUBGRAPH: SubgraphConfig,
 }
 
 

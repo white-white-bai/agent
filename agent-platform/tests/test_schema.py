@@ -99,3 +99,28 @@ def test_parameter_extractor_and_template_transform_configs():
     template = graph.node("tpl").typed_config()
     assert template.variables[0].name == "city"
     assert template.output_var == "output"
+
+
+def test_agent_config_accepts_autonomous_mode_and_discover_flag():
+    from agent_platform.graph.schema import AGENT_MODES, ToolRef
+
+    assert "autonomous" in AGENT_MODES
+    graph = GraphDef.model_validate(
+        {
+            "nodes": [
+                {
+                    "id": "agent",
+                    "type": "agent",
+                    "config": {
+                        "agent": "local.auto",
+                        "mode": "autonomous",
+                        "tools": [{"name": "weather", "server": "demo", "discover": "true"}],
+                    },
+                }
+            ]
+        }
+    )
+    config = graph.node("agent").typed_config()
+    assert config.mode == "autonomous"
+    assert config.tools[0].discover is True
+    assert ToolRef.model_validate({"name": "t", "discover": ""}).discover is False
