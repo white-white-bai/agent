@@ -64,6 +64,36 @@ CREATE TABLE IF NOT EXISTS ap_graph_version (
     UNIQUE KEY uk_ap_graph_version (graph_uuid, version)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '图发布版本（不可变快照）';
 
+CREATE TABLE IF NOT EXISTS ap_agent_app (
+    id                   BIGINT      NOT NULL AUTO_INCREMENT,
+    uuid                 VARCHAR(64) NOT NULL,
+    tenant_code          VARCHAR(64) NOT NULL,
+    app_uuid             VARCHAR(64) NOT NULL,
+    status               VARCHAR(16) NOT NULL DEFAULT 'draft',
+    published_version_id BIGINT      NULL,
+    draft                JSON        NULL,
+    created_at           DATETIME    NOT NULL,
+    updated_at           DATETIME    NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_ap_agent_app_uuid (uuid),
+    UNIQUE KEY uk_ap_agent_app_app_uuid (app_uuid),
+    KEY idx_ap_agent_app_tenant (tenant_code)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'Agent 应用配置（草稿，JSON document）';
+
+CREATE TABLE IF NOT EXISTS ap_agent_app_version (
+    id          BIGINT      NOT NULL AUTO_INCREMENT,
+    uuid        VARCHAR(64) NOT NULL,
+    agent_uuid  VARCHAR(64) NOT NULL,
+    version     INT         NOT NULL,
+    definition  JSON        NOT NULL,
+    note        VARCHAR(512) NOT NULL DEFAULT '',
+    created_by  VARCHAR(64) NOT NULL DEFAULT '',
+    created_at  DATETIME    NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_ap_agent_app_version_uuid (uuid),
+    UNIQUE KEY uk_ap_agent_app_version (agent_uuid, version)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'Agent 应用发布版本（不可变快照）';
+
 CREATE TABLE IF NOT EXISTS ap_conversation (
     id              BIGINT       NOT NULL AUTO_INCREMENT,
     uuid            VARCHAR(64)  NOT NULL,
@@ -266,6 +296,7 @@ CREATE TABLE IF NOT EXISTS ap_tool (
     tenant_code           VARCHAR(64)  NOT NULL DEFAULT '',
     name                  VARCHAR(128) NOT NULL,
     label                 VARCHAR(128) NOT NULL DEFAULT '',
+    description           TEXT         NULL,
     category              VARCHAR(32)  NOT NULL DEFAULT '',
     server                VARCHAR(64)  NOT NULL DEFAULT '',
     kind                  VARCHAR(16)  NOT NULL DEFAULT 'http',

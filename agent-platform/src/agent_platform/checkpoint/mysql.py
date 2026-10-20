@@ -212,3 +212,12 @@ class MySQLCheckpointSaver(BaseCheckpointSaver):
         task_path: str = "",
     ) -> None:
         self.put_writes(config, writes, task_id, task_path)
+
+    def delete_thread(self, thread_id: str) -> None:
+        """清空某个 thread 的全部 checkpoint 与写入（用于 agent 会话记忆清理）。"""
+        with session_scope() as session:
+            session.execute(delete(CheckpointWriteRow).where(CheckpointWriteRow.thread_id == thread_id))
+            session.execute(delete(CheckpointRow).where(CheckpointRow.thread_id == thread_id))
+
+    async def adelete_thread(self, thread_id: str) -> None:
+        self.delete_thread(thread_id)

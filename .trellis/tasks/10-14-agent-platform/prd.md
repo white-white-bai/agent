@@ -301,3 +301,18 @@
 
 **环境备注**：本机 Python 3.11.1；依赖已 `pip install -e ".[dev]"`；测试用临时 SQLite（`conftest.py`），生产用 MySQL（`sql/ddl.sql` 人工执行）。
 
+**M-续批（2026-10-16）· 真 Agent（新增 Agent 应用类型）**：把「伪 agent（提示词模板 + 正则解析 `Action:`）」升级为「真 agent（LLM 原生 function-calling 驱动的自主循环）」，作为独立应用类型接入现有对话兼容链路。既有 7 模式 agent 节点**保持不动**，与之并存。
+
+- [x] 形态：`App.app_type == "agent"` 的应用走自主运行时（无图），配置为「指令 + 模型 + 工具 + 知识 + 记忆 + 规划/反思 + 子 agent + HITL」；总闸 `AP_AGENT_APP_ENABLED`（默认 `false`，关闭时行为与改造前逐字节一致）
+- [x] 定义 schema：`agentapp/schema.py::AgentAppDef`（+ `AgentToolRef` / `AgentMemoryConfig` / `AgentHitlConfig`），复用 `graph/schema.py::KnowledgeConfig`
+- [x] 数据模型：`domain/models.py` 增 `AgentApp` / `AgentAppVersion`，`Tool` 增 `description`；`sql/ddl.sql` 同步；`sql/migrate_agent_app.sql`（守卫建表 + `information_schema` 加列，人工执行）
+- [x] 服务：`api/services.py` 镜像图那组 —— `save_agent_draft / get_agent_draft / publish_agent_draft / list_agent_versions / rollback_agent / get_published_agent`（发布时 `AgentAppDef.model_validate` 校验）
+- [x] 模型接口：`models/factory.py::build_chat_model`（OpenAI 兼容、`streaming=True`、可 `bind_tools`）+ `build_chat_model_builder`；`EngineContext` 增 `chat_model`（带默认值，不影响既有 `llm` 单轮协议）
+- [x] 运行时：`agentapp/{builder,tools,runtime}.py` —— LangGraph `StateGraph`（`MessagesState`）：`[plan] → agent ⟲ tools → [reflect] → finalize`，`ToolNode` 原生工具循环；记忆用自研 `MySQLCheckpointSaver`（`thread_id=conversation_id` 跨轮持久，`pre_model_hook` 裁剪 `memory.window` 并注入 `summary`）；规划/反思为可配开关
+- [x] 工具：`ap_tool.params → JSON Schema`（`StructuredTool`），执行复用 `tools/mcp_bridge.call_declared_tool`（白拿校验/重试/兜底）；知识检索工具；子 agent 委派工具（`AP_AGENT_APP_DEPTH` 深度受限）；**MCP Server 动态发现**（`mcp_servers` → `tools/list` 的 `inputSchema` 自动转工具，失败降级不阻断）
+- [x] HITL：`interrupt` 审批节点（`policy` off/before_all_tools/before_listed），拒绝注入错误 `ToolMessage` 让模型自适配；`resume_agent` 走 `Command(resume=...)`；会话存在待审批中断时新轮不静默续跑；**记忆清理** `DELETE /admin/apps/{uuid}/agent/conversations/{cid}/memory`（`MySQLCheckpointSaver.delete_thread`）
+- [x] 入口：`api/main.py::_chat_stream` 按 `app_type` 分叉到 `stream_agent`，产出同一 `token`/`final` 契约（`chunks` 回填 `retriever_resources`），下游幂等/并发/历史/护栏/SSE/落库**复用不变**；非流式兼容（`runWorkflow` / `/v1/workflows/run`）同步分叉
+- [x] 管理端：`api/admin.py` 增 `GET/PUT /apps/{uuid}/agent[/draft]`、`POST .../agent/{publish,rollback,run,resume}`、`GET .../agent/versions`；`api/schemas.py` 增 `AgentApp*Request`
+- [x] 前端：`AgentConfigView.vue`（配置表单 + 调试对话台，含 HITL 批准/拒绝）、隐藏路由 `/apps/:appUuid/agent`、`AppsView` 行操作按 `app_type` 分叉
+- [x] 测试：后端 `tests/test_agent_app.py` 17 项（定义/服务/工具 schema/原生工具循环/规划/checkpointer 记忆/子 agent 深度/MCP 动态发现/HITL 批准与拒绝/待审批不重跑/记忆清理/入口分叉与默认关闭回退/管理端 CRUD 与续跑契约），全套 481 项全绿 + `ruff` 通过；前端 `npm test` 202 项 + `lint` + `build` 通过；`scripts/smoke_e2e.py` 增 Agent 应用对话用例（真模型内网执行）
+

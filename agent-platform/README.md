@@ -158,6 +158,31 @@ start → 意图识别 → 知识检索 → 内容生成 → 合规质检 → �
   - 重写时 `generate4` 的提示词里会带上 `review`（合规意见），提示词用 `{% if (review | default('')) %}` 判断，
     首轮无该变量也不报错。
 
+## Agent 应用（真自主 agent）
+
+与上节的「图里的 agent 节点」不同：`app_type == "agent"` 的应用**没有工作流图**，配置即「指令 + 模型 + 工具 + 知识 + 记忆 + 规划/反思 + 子 agent + HITL」，
+运行时由 LLM **原生 function-calling** 自主循环（`langgraph` `StateGraph` + `ToolNode`）。二者并存，互不影响。
+
+**总闸**：`AP_AGENT_APP_ENABLED`（默认 `false`）。关闭时 `app_type="agent"` 的应用仍按「已发布图」执行，行为与改造前逐字节一致。
+
+- **定义**：`agentapp/schema.py::AgentAppDef`；存 `ap_agent_app` / `ap_agent_app_version`（草稿 + 发布版本，与图应用同构）。
+- **运行时**：`[规划?] → agent ⟲ 工具 → [反思] → 收尾`。`agent` 节点绑定工具（`bind_tools`）由模型自行决定调用；`plan` / `reflect` 为配置开关。
+- **工具**：`ap_tool` 声明按 name 引用，`params`（`{name,type,required,enum,description}`）转成 function-calling 的 JSON Schema；执行统一走 `call_declared_tool`（复用参数校验 / 重试 / 兜底）。知识库可暴露为 `knowledge_search` 工具；`sub_agents` 把子智能体暴露为 `delegate_<code>` 工具（`AP_AGENT_APP_DEPTH` 限制递归深度）；`mcp_servers` 会调 `tools/list` **动态发现** MCP 工具（`inputSchema` 自动转参模型，发现失败降级不阻断）。
+- **记忆**：自研 `MySQLCheckpointSaver` 按 `thread_id = conversation_id` **跨轮持久** agent 消息；`memory.window` 控制送模型的裁剪条数，`summary`（沿用 `AP_HISTORY_SUMMARY_*`）作为长窗口压缩注入。
+- **Human-in-the-loop**：`hitl.policy` = `off`（默认）/ `before_all_tools` / `before_listed`。命中策略的工具调用前 `interrupt` 暂停本轮，对外 SSE 仍以**正常的 `message_end`**返回审批提示（不引入未知事件，兼容链路安全）；管理端 `POST /admin/apps/{uuid}/agent/resume` 以 `Command(resume=...)` 批准/拒绝续跑。会话存在待审批中断时，新一轮不静默续跑。
+- **入口**：`/v1/chat-messages`（含 transfer 链路）按 `app_type` 分叉到 `stream_agent`，产出与图一致的 `token` / `final` 事件；`runWorkflow` / `/v1/workflows/run` 同步分叉。
+
+**管理端接口**（权限点 `agent:read` / `agent:write`）
+
+- `GET /admin/apps/{uuid}/agent`、`PUT .../agent/draft`、`POST .../agent/publish`、`GET .../agent/versions`、`POST .../agent/rollback`
+- `POST .../agent/run`（调试 SSE，事件 `token` / `agent_plan` / `agent_tool` / `agent_reflection` / `agent_interrupt` / `final` / `error`）
+- `POST .../agent/resume`（HITL 续跑 SSE，body `{conversation_id, decision: approve|reject}`）
+- `DELETE .../agent/conversations/{conversation_id}/memory`（清空该会话的长期记忆，即 checkpointer thread）
+
+**新增配置**：`AP_AGENT_APP_ENABLED`、`AP_AGENT_APP_MAX_STEPS`、`AP_AGENT_APP_DEPTH`。
+
+**迁移**：新建库执行 `sql/ddl.sql`；老库执行 `sql/migrate_agent_app.sql`（建 `ap_agent_app*` + `ap_tool` 补 `description`，幂等守卫）。
+
 ## 工具声明与调用治理
 
 `ap_tool` 声明工具（管理端「工具声明」页维护）：`name` / `label` / `server` / `kind(http|mcp)` / `http_method` + `http_path` /
