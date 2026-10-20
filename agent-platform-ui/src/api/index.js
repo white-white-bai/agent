@@ -33,6 +33,21 @@ export const runNode = (uuid, body) => request(`/admin/apps/${uuid}/graph/run-no
 export const runGraphStream = (uuid, body, onEvent, options) =>
   streamRequest(`/admin/apps/${uuid}/graph/run`, body, onEvent, options)
 
+// Agent 应用：配置 / 发布 / 版本 / 调试运行
+export const getAgentApp = (uuid) => request(`/admin/apps/${uuid}/agent`)
+export const saveAgentAppDraft = (uuid, definition) =>
+  request(`/admin/apps/${uuid}/agent/draft`, { method: 'PUT', body: { definition } })
+export const publishAgentApp = (uuid, body = {}) => request(`/admin/apps/${uuid}/agent/publish`, { method: 'POST', body })
+export const listAgentAppVersions = (uuid) => request(`/admin/apps/${uuid}/agent/versions`)
+export const rollbackAgentApp = (uuid, version) =>
+  request(`/admin/apps/${uuid}/agent/rollback`, { method: 'POST', body: { version } })
+export const runAgentStream = (uuid, body, onEvent, options) =>
+  streamRequest(`/admin/apps/${uuid}/agent/run`, body, onEvent, options)
+export const resumeAgent = (uuid, body, onEvent, options) =>
+  streamRequest(`/admin/apps/${uuid}/agent/resume`, body, onEvent, options)
+export const clearAgentMemory = (uuid, conversationId) =>
+  request(`/admin/apps/${uuid}/agent/conversations/${conversationId}/memory`, { method: 'DELETE' })
+
 // 护栏：敏感词 + 进程级开关
 export const listSensitiveWords = (params) => request('/admin/sensitive-words', { params })
 export const createSensitiveWord = (body) => request('/admin/sensitive-words', { method: 'POST', body })

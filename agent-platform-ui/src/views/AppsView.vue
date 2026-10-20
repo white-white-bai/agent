@@ -86,6 +86,10 @@ async function submit() {
   }
 }
 
+function openEditor(row) {
+  router.push(row.app_type === 'agent' ? `/apps/${row.uuid}/agent` : `/apps/${row.uuid}/graph`)
+}
+
 async function remove(row) {
   try {
     await ElMessageBox.confirm(`确认删除应用「${row.app_name || row.app_id}」？`, '删除确认', { type: 'warning' })
@@ -117,7 +121,9 @@ async function remove(row) {
       <el-table-column prop="api_key" label="api_key" min-width="180" show-overflow-tooltip />
       <el-table-column label="操作" width="220" fixed="right">
         <template #default="{ row }">
-          <el-button link type="primary" @click="router.push(`/apps/${row.uuid}/graph`)">编排</el-button>
+          <el-button link type="primary" @click="openEditor(row)">
+            {{ row.app_type === 'agent' ? '配置' : '编排' }}
+          </el-button>
           <el-button v-if="auth.can('app:write')" link type="primary" @click="openEdit(row)">编辑</el-button>
           <el-button v-if="auth.can('app:write')" link type="danger" @click="remove(row)">删除</el-button>
         </template>

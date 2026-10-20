@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, UploadFile
 
+from agent_platform.agentapp.runtime import run_agent
 from agent_platform.api import compat, services
 from agent_platform.api.deps import get_engine_context
 from agent_platform.api.schemas import (
@@ -15,10 +16,35 @@ from agent_platform.api.schemas import (
     TokenRequest,
     WorkflowRunRequest,
 )
+from agent_platform.checkpoint.factory import build_checkpointer
 from agent_platform.core.config import get_settings
 from agent_platform.core.security import AuthError, check_client, issue_token, resolve_api_key
 from agent_platform.engine.context import EngineContext
 from agent_platform.engine.runtime import run_graph
+
+
+async def _run_app_state(app_record: Any, inputs: dict[str, Any], ctx: EngineContext) -> dict[str, Any] | None:
+    """按应用类型执行一次（agent 应用走自主运行时），返回 {answer, variables}；未发布定义返回 None。"""
+    settings = get_settings()
+    if app_record.app_type == "agent" and settings.agent_app_enabled:
+        agent_def = services.get_published_agent(app_record.uuid)
+        if agent_def is None:
+            return None
+        query = str(inputs.get("query") or "")
+        result = await run_agent(
+            agent_def,
+            {**inputs, "query": query},
+            ctx,
+            checkpointer=build_checkpointer(settings),
+            thread_id=uuid.uuid4().hex,
+            tenant_code=app_record.tenant_code,
+        )
+        return {"answer": result["answer"], "variables": {}}
+    graph_def = services.get_published_graph(app_record.uuid)
+    if graph_def is None:
+        return None
+    state = await run_graph(graph_def, inputs, ctx)
+    return {"answer": state.get("answer", ""), "variables": state.get("variables", {})}
 
 router = APIRouter(tags=["compat"])
 
@@ -255,12 +281,11 @@ async def cloud_run_workflow(
     ctx: EngineContext = Depends(get_engine_context),
 ) -> dict[str, Any]:
     app_record = _app_by_identifier(request.get("appId") or request.get("app_id") or "")
-    graph_def = services.get_published_graph(app_record.uuid)
-    if graph_def is None:
-        return compat.workflow_result({}, status="failed", error="应用未发布图定义")
     inputs = request.get("inputs") or {}
-    state = await run_graph(graph_def, inputs, ctx)
-    answer = state.get("answer", "")
+    state = await _run_app_state(app_record, inputs, ctx)
+    if state is None:
+        return compat.workflow_result({}, status="failed", error="应用未发布图定义")
+    answer = state["answer"]
     llm_name = inputs.get("llm_name", "")
     outputs = {
         "status": "success",
@@ -392,10 +417,9 @@ async def dify_workflow_run(
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     app_record = _require_app(_headers(api_key_header, authorization))
-    graph_def = services.get_published_graph(app_record.uuid)
-    if graph_def is None:
+    state = await _run_app_state(app_record, request.inputs, ctx)
+    if state is None:
         raise HTTPException(status_code=400, detail="应用未发布图定义")
-    state = await run_graph(graph_def, request.inputs, ctx)
     run_id = uuid.uuid4().hex
     return {
         "workflow_run_id": run_id,
@@ -404,7 +428,7 @@ async def dify_workflow_run(
             "id": run_id,
             "workflow_id": app_record.uuid,
             "status": "succeeded",
-            "outputs": {"answer": state.get("answer", ""), **state.get("variables", {})},
+            "outputs": {"answer": state["answer"], **state.get("variables", {})},
             "error": None,
             "elapsed_time": 0.0,
             "total_tokens": 0,

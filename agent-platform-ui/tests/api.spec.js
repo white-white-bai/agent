@@ -3,14 +3,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('@/api/client', () => ({
   request: vi.fn(async () => ({ ok: true })),
   uploadRequest: vi.fn(async () => ({ ok: true })),
+  streamRequest: vi.fn(async () => ({ ok: true })),
 }))
 
-import { request, uploadRequest } from '@/api/client'
+import { request, streamRequest, uploadRequest } from '@/api/client'
 import * as api from '@/api'
 
 beforeEach(() => {
   request.mockClear()
   uploadRequest.mockClear()
+  streamRequest.mockClear()
 })
 
 describe('api endpoint map', () => {
@@ -60,6 +62,13 @@ describe('api endpoint map', () => {
     ['previewChunks', () => api.previewChunks('fd'), '/admin/knowledge/preview', { method: 'POST', body: 'fd' }],
     ['listProviders', () => api.listProviders(), '/admin/providers', undefined],
     ['metricsOverview', () => api.metricsOverview({ days: 7 }), '/admin/metrics/overview', { params: { days: 7 } }],
+    ['getAgentApp', () => api.getAgentApp('u'), '/admin/apps/u/agent', undefined],
+    ['saveAgentAppDraft', () => api.saveAgentAppDraft('u', { name: 'n' }), '/admin/apps/u/agent/draft', { method: 'PUT', body: { definition: { name: 'n' } } }],
+    ['publishAgentApp', () => api.publishAgentApp('u', { note: 'n' }), '/admin/apps/u/agent/publish', { method: 'POST', body: { note: 'n' } }],
+    ['publishAgentApp default body', () => api.publishAgentApp('u'), '/admin/apps/u/agent/publish', { method: 'POST', body: {} }],
+    ['listAgentAppVersions', () => api.listAgentAppVersions('u'), '/admin/apps/u/agent/versions', undefined],
+    ['rollbackAgentApp', () => api.rollbackAgentApp('u', 2), '/admin/apps/u/agent/rollback', { method: 'POST', body: { version: 2 } }],
+    ['clearAgentMemory', () => api.clearAgentMemory('u', 'c1'), '/admin/apps/u/agent/conversations/c1/memory', { method: 'DELETE' }],
   ]
 
   it.each(cases)('%s calls request correctly', async (_name, call, path, options) => {
@@ -69,6 +78,23 @@ describe('api endpoint map', () => {
     } else {
       expect(request).toHaveBeenCalledWith(path, options)
     }
+  })
+
+  it('runAgentStream posts through streamRequest', async () => {
+    const onEvent = () => {}
+    await api.runAgentStream('u', { query: 'q' }, onEvent, { signal: 's' })
+    expect(streamRequest).toHaveBeenCalledWith('/admin/apps/u/agent/run', { query: 'q' }, onEvent, { signal: 's' })
+  })
+
+  it('resumeAgent posts through streamRequest', async () => {
+    const onEvent = () => {}
+    await api.resumeAgent('u', { conversation_id: 'c', decision: 'approve' }, onEvent, undefined)
+    expect(streamRequest).toHaveBeenCalledWith(
+      '/admin/apps/u/agent/resume',
+      { conversation_id: 'c', decision: 'approve' },
+      onEvent,
+      undefined,
+    )
   })
 
   it('uploadDatasetDocument posts FormData through uploadRequest with a progress callback', async () => {

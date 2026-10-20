@@ -63,6 +63,13 @@ class Settings(BaseSettings):
     # 智能体：ReAct 等模式的默认步数上限
     agent_max_steps: int = 6
 
+    # Agent 应用（自主 agent，原生 function-calling）：总闸默认关，关闭时 app_type=agent 仍走工作流路径
+    agent_app_enabled: bool = False
+    agent_app_max_steps: int = 6
+    # 子 agent 委派递归深度上限
+    agent_app_depth: int = 2
+    agent_app_tool_timeout: float = 30.0
+
     # 检索流水线
     # 粗召回（向量）候选数；0 表示用知识节点自己的 top_k
     retrieval_coarse_top_k: int = 0

@@ -75,6 +75,37 @@ class GraphVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
+class AgentApp(Base):
+    """Agent 应用配置（草稿/发布）：对标图应用，但定义的是自主 agent 而非工作流图。"""
+
+    __tablename__ = "ap_agent_app"
+    __table_args__ = (UniqueConstraint("app_uuid", name="uk_ap_agent_app_app_uuid"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    tenant_code: Mapped[str] = mapped_column(String(64), index=True)
+    app_uuid: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(16), default="draft")
+    published_version_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    draft: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class AgentAppVersion(Base):
+    __tablename__ = "ap_agent_app_version"
+    __table_args__ = (UniqueConstraint("agent_uuid", "version", name="uk_ap_agent_app_version"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    agent_uuid: Mapped[str] = mapped_column(String(64), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    definition: Mapped[dict] = mapped_column(JSON)
+    note: Mapped[str] = mapped_column(String(512), default="")
+    created_by: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
 class Conversation(Base):
     __tablename__ = "ap_conversation"
     __table_args__ = (UniqueConstraint("conversation_id", name="uk_ap_conversation_id"),)
@@ -282,6 +313,7 @@ class Tool(Base):
     tenant_code: Mapped[str] = mapped_column(String(64), index=True, default="")
     name: Mapped[str] = mapped_column(String(128), index=True)
     label: Mapped[str] = mapped_column(String(128), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
     category: Mapped[str] = mapped_column(String(32), default="")
     server: Mapped[str] = mapped_column(String(64), default="")
     kind: Mapped[str] = mapped_column(String(16), default="http")

@@ -20,6 +20,12 @@ class LLMInvoker(Protocol):
     ) -> str: ...
 
 
+class ChatModelBuilder(Protocol):
+    """构建支持工具调用/多轮消息/流式的 ChatModel（自主 agent 用）。"""
+
+    def __call__(self, *, provider: str, temperature: float, max_tokens: int | None) -> Any: ...
+
+
 class Retriever(Protocol):
     async def __call__(
         self, config: KnowledgeConfig, query: str, tenant_code: str = ""
@@ -62,6 +68,10 @@ async def _unavailable_agent_invoker(
     raise RuntimeError("智能体运行时未配置：请在 EngineContext 注入 AgentInvoker")
 
 
+def _unavailable_chat_model(*, provider: str, temperature: float, max_tokens: int | None) -> Any:
+    raise RuntimeError("ChatModel 未配置：请在 EngineContext 注入 chat_model（自主 agent 应用需要）")
+
+
 @dataclass
 class EngineContext:
     llm: LLMInvoker
@@ -69,6 +79,7 @@ class EngineContext:
     tools: ToolInvoker = field(default=_unavailable_tool_invoker)
     code_runner: CodeRunner | None = None
     agents: AgentInvoker = field(default=_unavailable_agent_invoker)
+    chat_model: ChatModelBuilder = field(default=_unavailable_chat_model)
     tenant_code: str = ""
     tracer: Any = None
 

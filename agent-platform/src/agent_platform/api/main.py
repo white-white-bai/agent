@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, Header
 from fastapi.responses import StreamingResponse
 
+from agent_platform.agentapp.runtime import stream_agent
 from agent_platform.api import accounts, admin, compat, compat_api, services
 from agent_platform.api.deps import (
     build_request_tracer,
@@ -18,6 +19,7 @@ from agent_platform.api.deps import (
     get_idempotency_store,
 )
 from agent_platform.api.schemas import ChatMessagesRequest
+from agent_platform.checkpoint.factory import build_checkpointer
 from agent_platform.core import accounts as accounts_core
 from agent_platform.core import agents_seed, metrics
 from agent_platform.core.concurrency import ConcurrencyLimiter
@@ -85,10 +87,20 @@ async def _chat_stream(
         yield compat.default_reply()
         return
 
-    graph_def = services.get_published_graph(app_record.uuid)
-    if graph_def is None:
-        yield compat.default_reply()
-        return
+    settings = get_settings()
+    is_agent_app = app_record.app_type == "agent" and settings.agent_app_enabled
+    agent_def = None
+    graph_def = None
+    if is_agent_app:
+        agent_def = services.get_published_agent(app_record.uuid)
+        if agent_def is None:
+            yield compat.default_reply()
+            return
+    else:
+        graph_def = services.get_published_graph(app_record.uuid)
+        if graph_def is None:
+            yield compat.default_reply()
+            return
 
     ctx.tenant_code = app_record.tenant_code
 
@@ -120,7 +132,6 @@ async def _chat_stream(
             slot_held = limiter.enabled
 
         conversation = services.get_or_create_conversation(app_record, request.user, request.conversation_id)
-        settings = get_settings()
         history = services.load_history(conversation, settings.history_window)
         summary = ""
         if settings.history_summary_enabled and settings.history_window > 0:
@@ -158,7 +169,18 @@ async def _chat_stream(
         answer = ""
         resources: list[dict] = []
         try:
-            async for item in stream_graph(graph_def, inputs, ctx, thread_id=conversation.conversation_id):
+            if is_agent_app:
+                stream = stream_agent(
+                    agent_def,
+                    inputs,
+                    ctx,
+                    checkpointer=build_checkpointer(settings),
+                    thread_id=conversation.conversation_id,
+                    tenant_code=app_record.tenant_code,
+                )
+            else:
+                stream = stream_graph(graph_def, inputs, ctx, thread_id=conversation.conversation_id)
+            async for item in stream:
                 if item["type"] == "token":
                     answer += item["content"]
                     yield compat.sse(

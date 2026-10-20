@@ -1,7 +1,7 @@
 """请求/响应 schema（兼容云智 / Dify + 中台管理端）。"""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -159,6 +159,7 @@ class ToolUpsertRequest(BaseModel):
     tenant_code: str = ""
     name: str = ""
     label: str = ""
+    description: str = ""
     category: str = ""
     server: str = ""
     kind: str = "http"
@@ -206,6 +207,33 @@ class AgentUpsertRequest(BaseModel):
     reflection_rounds: int = 2
     temperature: float = 0.3
     max_tokens: int | None = None
+
+
+class AgentAppDraftRequest(BaseModel):
+    definition: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentAppPublishRequest(BaseModel):
+    note: str = ""
+    created_by: str = ""
+    definition: dict[str, Any] | None = None
+
+
+class AgentAppRollbackRequest(BaseModel):
+    version: int
+
+
+class AgentRunRequest(BaseModel):
+    query: str = ""
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    conversation_id: str = ""
+    definition: dict[str, Any] | None = None
+
+
+class AgentResumeRequest(BaseModel):
+    conversation_id: str
+    decision: Literal["approve", "reject"] = "approve"
+    edits: dict[str, Any] = Field(default_factory=dict)
 
 
 class SensitiveWordCreateRequest(BaseModel):

@@ -11,6 +11,8 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
+from agent_platform.agentapp.runtime import resume_agent, stream_agent
+from agent_platform.agentapp.schema import AgentAppDef
 from agent_platform.api import graph_templates, services
 from agent_platform.api.deps import (
     build_request_tracer,
@@ -20,6 +22,11 @@ from agent_platform.api.deps import (
     require_permission,
 )
 from agent_platform.api.schemas import (
+    AgentAppDraftRequest,
+    AgentAppPublishRequest,
+    AgentAppRollbackRequest,
+    AgentResumeRequest,
+    AgentRunRequest,
     AgentUpsertRequest,
     AppCreateRequest,
     AppUpdateRequest,
@@ -40,6 +47,7 @@ from agent_platform.api.schemas import (
     ToolUpsertRequest,
 )
 from agent_platform.api.uploads import read_document, read_upload
+from agent_platform.checkpoint.factory import build_checkpointer
 from agent_platform.core import metrics
 from agent_platform.core.accounts import AdminPrincipal
 from agent_platform.core.config import get_settings
@@ -200,6 +208,166 @@ def rollback_graph(app_uuid: str, request: GraphRollbackRequest) -> dict[str, An
     if version is None:
         raise HTTPException(status_code=404, detail="版本不存在")
     return {"data": _version_dict(version)}
+
+
+# --------------------------------------------------------------------------- Agent 应用（自主 agent）
+
+def _agent_app_row(app_uuid: str) -> Any:
+    row = services.get_app_by_uuid(app_uuid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="应用不存在")
+    return row
+
+
+@router.get("/apps/{app_uuid}/agent", dependencies=[Depends(require_permission("agent:read"))])
+def get_agent_app_config(app_uuid: str) -> dict[str, Any]:
+    _agent_app_row(app_uuid)
+    row = services.get_agent_app(app_uuid)
+    return {
+        "data": {
+            "app_uuid": app_uuid,
+            "status": getattr(row, "status", "draft"),
+            "definition": services.get_agent_draft(app_uuid) or {},
+        }
+    }
+
+
+@router.put("/apps/{app_uuid}/agent/draft", dependencies=[Depends(require_permission("agent:write"))])
+def save_agent_app_draft(app_uuid: str, request: AgentAppDraftRequest) -> dict[str, Any]:
+    _agent_app_row(app_uuid)
+    row = services.save_agent_draft(app_uuid, request.definition)
+    return {"data": {"app_uuid": app_uuid, "status": row.status, "definition": row.draft}}
+
+
+@router.post("/apps/{app_uuid}/agent/publish", dependencies=[Depends(require_permission("agent:write"))])
+def publish_agent_app(app_uuid: str, request: AgentAppPublishRequest) -> dict[str, Any]:
+    _agent_app_row(app_uuid)
+    try:
+        version = services.publish_agent_draft(
+            app_uuid, note=request.note, created_by=request.created_by, definition=request.definition
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=f"Agent 定义非法: {exc}") from exc
+    if version is None:
+        raise HTTPException(status_code=400, detail="草稿为空，无法发布")
+    return {"data": _version_dict(version)}
+
+
+@router.get("/apps/{app_uuid}/agent/versions", dependencies=[Depends(require_permission("agent:read"))])
+def list_agent_app_versions(app_uuid: str) -> dict[str, Any]:
+    return {"data": [_version_dict(row) for row in services.list_agent_versions(app_uuid)]}
+
+
+@router.post("/apps/{app_uuid}/agent/rollback", dependencies=[Depends(require_permission("agent:write"))])
+def rollback_agent_app(app_uuid: str, request: AgentAppRollbackRequest) -> dict[str, Any]:
+    version = services.rollback_agent(app_uuid, request.version)
+    if version is None:
+        raise HTTPException(status_code=404, detail="版本不存在")
+    return {"data": _version_dict(version)}
+
+
+@router.post("/apps/{app_uuid}/agent/run", dependencies=[Depends(require_permission("agent:write"))])
+async def run_agent_stream(
+    app_uuid: str,
+    request: AgentRunRequest,
+    ctx: EngineContext = Depends(get_engine_context),
+    principal: AdminPrincipal = Depends(get_current_admin),
+) -> StreamingResponse:
+    """Agent 调试运行：基于传入定义（缺省取草稿）流式跑一遍，事件 token/agent_*/final/error。"""
+    app_row = _agent_app_row(app_uuid)
+    raw = request.definition if request.definition else services.get_agent_draft(app_uuid)
+    if not raw:
+        raise HTTPException(status_code=400, detail="Agent 定义为空，请先保存草稿或传入 definition")
+    try:
+        agent_def = AgentAppDef.model_validate(raw)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=f"Agent 定义非法: {exc}") from exc
+    ctx.tenant_code = app_row.tenant_code
+    tracer = build_request_tracer(
+        principal.username,
+        {"app_id": app_row.app_id, "source": "editor-agent-run"},
+        name="agent-run",
+    )
+    ctx.tracer = tracer
+    thread_id = request.conversation_id or f"debug-{app_uuid}-{uuid.uuid4().hex}"
+    inputs = {**request.inputs, "query": request.query}
+
+    async def _events() -> AsyncIterator[str]:
+        try:
+            async for item in stream_agent(
+                agent_def,
+                inputs,
+                ctx,
+                checkpointer=build_checkpointer(get_settings()),
+                thread_id=thread_id,
+                tenant_code=app_row.tenant_code,
+            ):
+                yield f"data: {json.dumps(item, ensure_ascii=False, default=str)}\n\n"
+        except Exception as exc:  # noqa: BLE001 - 流式接口要把错误作为事件回传，不能直接抛
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)}, ensure_ascii=False)}\n\n"
+        finally:
+            tracer.flush()
+
+    return StreamingResponse(
+        _events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/apps/{app_uuid}/agent/resume", dependencies=[Depends(require_permission("agent:write"))])
+async def resume_agent_run(
+    app_uuid: str,
+    request: AgentResumeRequest,
+    ctx: EngineContext = Depends(get_engine_context),
+    principal: AdminPrincipal = Depends(get_current_admin),
+) -> StreamingResponse:
+    """对处于 HITL 中断暂停态的会话续跑（批准 / 拒绝）。"""
+    app_row = _agent_app_row(app_uuid)
+    agent_def = services.get_published_agent(app_uuid)
+    if agent_def is None:
+        raise HTTPException(status_code=400, detail="应用未发布 Agent 定义")
+    ctx.tenant_code = app_row.tenant_code
+    tracer = build_request_tracer(
+        principal.username,
+        {"app_id": app_row.app_id, "source": "editor-agent-resume"},
+        name="agent-resume",
+    )
+    ctx.tracer = tracer
+    resume_value = {"decision": request.decision, "edits": request.edits}
+
+    async def _events() -> AsyncIterator[str]:
+        try:
+            async for item in resume_agent(
+                agent_def,
+                resume_value,
+                ctx,
+                checkpointer=build_checkpointer(get_settings()),
+                thread_id=request.conversation_id,
+                tenant_code=app_row.tenant_code,
+            ):
+                yield f"data: {json.dumps(item, ensure_ascii=False, default=str)}\n\n"
+        except Exception as exc:  # noqa: BLE001
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)}, ensure_ascii=False)}\n\n"
+        finally:
+            tracer.flush()
+
+    return StreamingResponse(
+        _events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.delete(
+    "/apps/{app_uuid}/agent/conversations/{conversation_id}/memory",
+    dependencies=[Depends(require_permission("agent:write"))],
+)
+def clear_agent_memory(app_uuid: str, conversation_id: str) -> dict[str, Any]:
+    """清空某个 agent 会话的长期记忆（checkpointer thread）。"""
+    _agent_app_row(app_uuid)
+    build_checkpointer(get_settings()).delete_thread(conversation_id)
+    return {"data": {"conversation_id": conversation_id, "cleared": True}}
 
 
 @router.post("/apps/{app_uuid}/graph/import", dependencies=[Depends(require_permission("graph:write"))])

@@ -63,6 +63,14 @@ vi.mock('@/api', () => ({
   listGraphTemplates: vi.fn(async () => []),
   getGraphTemplate: vi.fn(async () => ({ definition: {} })),
   metricsOverview: vi.fn(async () => ({})),
+  getAgentApp: vi.fn(async () => ({ status: 'draft', definition: {} })),
+  saveAgentAppDraft: vi.fn(async () => ({})),
+  publishAgentApp: vi.fn(async () => ({ version: 1 })),
+  listAgentAppVersions: vi.fn(async () => []),
+  rollbackAgentApp: vi.fn(async () => ({})),
+  runAgentStream: vi.fn(async () => ({})),
+  resumeAgent: vi.fn(async () => ({})),
+  clearAgentMemory: vi.fn(async () => ({ cleared: true })),
 }))
 
 import * as api from '@/api'
@@ -80,6 +88,7 @@ import MetricsView from '@/views/MetricsView.vue'
 import AgentsView from '@/views/AgentsView.vue'
 import ToolsView from '@/views/ToolsView.vue'
 import PromptsView from '@/views/PromptsView.vue'
+import AgentConfigView from '@/views/AgentConfigView.vue'
 
 const flush = () => flushPromises()
 
@@ -361,5 +370,21 @@ describe('PromptsView', () => {
     expect(api.listPrompts).toHaveBeenCalled()
     expect(wrapper.text()).toContain('fewshot.gov_intent')
     expect(wrapper.text()).toContain('政务意图识别')
+  })
+})
+
+describe('AgentConfigView', () => {
+  it('loads the agent config and offers save/publish to writers', async () => {
+    api.getAgentApp.mockResolvedValueOnce({
+      status: 'draft',
+      definition: { name: '问答', instructions: 'hi', tools: [{ name: 'gov.lookup' }] },
+    })
+    const { wrapper } = await mountView(AgentConfigView, { path: '/apps/app-1/agent' })
+    expect(api.getAgentApp).toHaveBeenCalled()
+    expect(api.getApp).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('Agent 配置')
+    expect(wrapper.text()).toContain('保存草稿')
+    expect(wrapper.text()).toContain('发布')
+    expect(wrapper.text()).toContain('调试对话')
   })
 })
