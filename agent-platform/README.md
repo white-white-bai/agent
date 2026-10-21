@@ -467,10 +467,12 @@ python -m agent_platform.worker.main
   `POST /webhooks/hitl/approve|reject` body `{token, edits?}` 无需管理端登录。token 中的 interrupt id 必须与当前
   待审批中断一致；图运行恢复使用原子 `claim_run`，所有回调还会写 `ap_hitl_action` 唯一约束，
   同一 interrupt 的第二个决策（含多进程并发）返回 409。
+- 持久化通知：`AP_HITL_OUTBOX_ENABLED=true` 时通知先落 `ap_hitl_outbox`，API 后台按 `AP_HITL_OUTBOX_POLL_SECONDS`
+  重试；失败按指数退避，达到 `AP_HITL_OUTBOX_MAX_ATTEMPTS` 后标记 failed。
 - **对外 `/v1`、云智链路不暴露 interrupt**：审批节点在外部链路按 `default_action` 自动通过，仍以
   `message`/`message_end` 收尾，Java/前端协议零改动。
 - `interrupt()` 恢复会从头重跑审批节点，审批节点只做纯表达式求值；不要在审批节点前放不可重入的副作用。
-- 老库执行 `sql/migrate_checkpoint_hitl.sql` + `sql/migrate_runs.sql` + `sql/migrate_hitl_action.sql`；`checkpoint`/`metadata`/`value` 必须是
+- 老库执行 `sql/migrate_checkpoint_hitl.sql` + `sql/migrate_runs.sql` + `sql/migrate_hitl_action.sql` + `sql/migrate_hitl_outbox.sql`；`checkpoint`/`metadata`/`value` 必须是
   `LONGBLOB`，`ap_checkpoint` 必须有 `metadata_type`，`ap_checkpoint_write` 必须有 `task_path`。
 
 ## 动态子图（默认关闭）

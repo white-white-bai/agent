@@ -86,6 +86,10 @@ class Settings(BaseSettings):
     hitl_webhook_timeout_seconds: float = 3.0
     hitl_webhook_attempts: int = 2
     hitl_webhook_backoff_seconds: float = 0.2
+    hitl_outbox_enabled: bool = False
+    hitl_outbox_poll_seconds: float = 5.0
+    hitl_outbox_max_attempts: int = 6
+    hitl_outbox_backoff_seconds: float = 5.0
     hitl_callback_base_url: str = ""
     hitl_action_ttl_seconds: int = 86400
 

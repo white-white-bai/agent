@@ -1,6 +1,7 @@
 """FastAPI 入口。"""
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from collections.abc import AsyncIterator
@@ -43,9 +44,19 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_db()
     agents_seed.seed()
-    if get_settings().admin_auth_enabled:
+    settings = get_settings()
+    if settings.admin_auth_enabled:
         accounts_core.seed()
-    yield
+    outbox_task = None
+    if settings.hitl_outbox_enabled:
+        from agent_platform.core.hitl_outbox import worker as outbox_worker
+
+        outbox_task = asyncio.create_task(outbox_worker(settings))
+    try:
+        yield
+    finally:
+        if outbox_task is not None:
+            outbox_task.cancel()
 
 
 app = FastAPI(title="agent-platform", version="0.1.0", lifespan=lifespan)

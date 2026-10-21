@@ -421,6 +421,23 @@ class ToolAuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
+class HitlOutbox(Base):
+    """HITL 外部通知 outbox：持久化待发送/重试中的 Webhook 事件。"""
+
+    __tablename__ = "ap_hitl_outbox"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    event: Mapped[str] = mapped_column(String(32), index=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
 class HitlAction(Base):
     """外部审批回调幂等记录：同一 interrupt 只允许一个决策落库。"""
 
