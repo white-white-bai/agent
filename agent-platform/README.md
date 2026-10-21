@@ -210,6 +210,8 @@ start → 意图识别 → 知识检索 → 内容生成 → 合规质检 → �
 - **工具**：`ap_tool` 声明按 name 引用，`params`（`{name,type,required,enum,description}`）转成 function-calling 的 JSON Schema；执行统一走 `call_declared_tool`（复用参数校验 / 重试 / 兜底）。知识库可暴露为 `knowledge_search` 工具；`sub_agents` 把子智能体暴露为 `delegate_<code>` 工具（`AP_AGENT_APP_DEPTH` 限制递归深度）；`mcp_servers` 会调 `tools/list` **动态发现** MCP 工具（`inputSchema` 自动转参模型，发现失败降级不阻断）。
 - **记忆**：自研 `MySQLCheckpointSaver` 按 `thread_id = conversation_id` **跨轮持久** agent 消息；`memory.window` 控制送模型的裁剪条数，`summary`（沿用 `AP_HISTORY_SUMMARY_*`）作为长窗口压缩注入。
 - **Human-in-the-loop**：`hitl.policy` = `off`（默认）/ `before_all_tools` / `before_listed`。命中策略的工具调用前 `interrupt` 暂停本轮，对外 SSE 仍以**正常的 `message_end`**返回审批提示（不引入未知事件，兼容链路安全）；管理端 `POST /admin/apps/{uuid}/agent/resume` 以 `Command(resume=...)` 批准/拒绝续跑。会话存在待审批中断时，新一轮不静默续跑。
+- **外部审批通知**：配置 `AP_HITL_WEBHOOK_URL` 后，图运行与 Agent 应用中断时向 Webhook POST `{event, payload}`（含 `thread_id` / `app_uuid` / `resume_endpoint` / 中断载荷）；`AP_HITL_WEBHOOK_SECRET` 作为 `X-Webhook-Secret` 发送。通知失败只记日志，不阻断审批和 SSE。
+- **不可信内容隔离**：开启 `AP_PROMPT_GUARD_ENABLED=true` 后，声明式工具、MCP 动态工具、知识检索和子 Agent 的返回文本会先剥离常见指令注入，再用 `<untrusted_data>` 边界包裹后送入模型；`AP_PROMPT_GUARD_MAX_CHARS` 控制截断长度。默认关闭，避免改变既有输出。
 - **入口**：`/v1/chat-messages`（含 transfer 链路）按 `app_type` 分叉到 `stream_agent`，产出与图一致的 `token` / `final` 事件；`runWorkflow` / `/v1/workflows/run` 同步分叉。
 
 **管理端接口**（权限点 `agent:read` / `agent:write`）
@@ -223,18 +225,43 @@ start → 意图识别 → 知识检索 → 内容生成 → 合规质检 → �
 
 **迁移**：新建库执行 `sql/ddl.sql`；老库执行 `sql/migrate_agent_app.sql`（建 `ap_agent_app*` + `ap_tool` 补 `description`，幂等守卫）。
 
+### 执行轨迹评测（CI 门禁）
+
+`agentapp/eval.py` 把 `stream_agent` 的 SSE 事件标准化为轨迹（`tool_calls` / `plan` / `reflections` / `answer` / `status`），
+按**标准工具调用顺序**计算 Levenshtein 距离并打分；同时支持禁用工具、答案关键字、状态/调用次数约束和可选 LLM judge。
+工具路径偏离、调用禁用工具或答案缺关键内容都会使用例失败。
+
+```bash
+# cases / traces 均为 JSONL（也支持 JSON 数组或 {"cases": [...]}）
+python scripts/eval_agent_traces.py \
+  --cases evals/agent_cases.example.jsonl \
+  --traces evals/agent_traces.example.jsonl
+# 失败返回 1，可直接接 CI；--json 输出结构化报告
+```
+
+默认用例要求工具序列完全一致（`min_path_score=1.0`）；给测试数据时用 `min_path_score` 放宽部分匹配。
+`tests/test_agent_eval.py` 已把示例文件作为 CI 门禁，并提供 judge/禁用工具/偏离路径的单元用例。
+
 ## 工具声明与调用治理
 
 `ap_tool` 声明工具（管理端「工具声明」页维护）：`name` / `label` / `server` / `kind(http|mcp)` / `http_method` + `http_path` /
-`params`（JSON schema：name/type/required/enum）/ `retry_attempts` / `retry_backoff_seconds` / `fallback`。
-
-调用统一经过 `tools/policy.py`：
+`params`（JSON schema：name/type/required/enum）/ `retry_attempts` / `retry_backoff_seconds` / `fallback`。调用统一经过 `tools/policy.py`：
 
 1. **参数校验**：必填、类型（string/number/boolean/array/object）、`enum` 越界；失败直接抛出（不重试）。
 2. **异常重试**：只重试瞬时错误（超时 / 连接失败 / 5xx / 429），指数退避；默认 `AP_TOOL_RETRY_ATTEMPTS=2`。
 3. **错误兜底**：默认关闭；开启后按 `mode` 返回空值 / 固定值 / 提示话术。链条级策略由 `ToolRef.on_error`（`raise` 默认 / `skip`）控制。
 
 未在 `ap_tool` 声明的引用回退到旧的「服务 + `/tools/{name}`」行为，行为不变。`POST /admin/tools/{uuid}/test` 可用样例参数实调一次。
+
+## 代码节点与沙箱
+
+`code` 节点执行 `main(**inputs)`。默认 `AP_CODE_SANDBOX_MODE=inprocess`：进程内受限 `exec`（白名单 builtins、无导入/网络），
+保持旧行为和兼容性，但**不是强隔离**，不要用来跑不可信代码。
+
+生产建议 `AP_CODE_SANDBOX_MODE=docker`：每次运行启动一次性容器，`--network none`、只读根文件系统、非 root、
+`--cap-drop ALL`、`no-new-privileges`，并限制 `--memory` / `--cpus` / `--pids-limit`；超时会 `docker rm -f` 清理。
+镜像、CPU/内存/PID 和超时分别由 `AP_CODE_SANDBOX_IMAGE` / `AP_CODE_SANDBOX_CPUS` / `AP_CODE_SANDBOX_MEMORY` /
+`AP_CODE_SANDBOX_PIDS_LIMIT` / `AP_CODE_SANDBOX_TIMEOUT_SECONDS` 控制。Docker 不可用时该模式**失败关闭**，不会静默回退到进程内执行。
 
 ## 链路追踪（Langfuse）
 

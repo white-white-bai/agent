@@ -65,6 +65,23 @@ class Settings(BaseSettings):
     # 智能体自主循环：单个工具结果回灌模型时的最大字符数
     agent_tool_result_max_chars: int = 4000
 
+    # 代码节点沙箱：inprocess（默认，受限 exec，兼容旧行为）/ docker（隔离容器，推荐生产）
+    code_sandbox_mode: str = "inprocess"
+    code_sandbox_image: str = "python:3.11-slim"
+    code_sandbox_timeout_seconds: float = 5.0
+    code_sandbox_memory: str = "128m"
+    code_sandbox_cpus: str = "0.5"
+    code_sandbox_pids_limit: int = 64
+
+    # 不可信内容隔离：开启后对工具/知识/子 Agent 输出剥离指令注入并加边界标记
+    prompt_guard_enabled: bool = False
+    prompt_guard_max_chars: int = 12000
+
+    # HITL 外部通知：中断时 POST Webhook；留空关闭
+    hitl_webhook_url: str = ""
+    hitl_webhook_secret: str = ""
+    hitl_webhook_timeout_seconds: float = 3.0
+
     # MCP 工具运行时发现：默认关闭，关闭时只用 ap_tool 声明
     tool_discovery_enabled: bool = False
     tool_discovery_ttl_seconds: int = 300

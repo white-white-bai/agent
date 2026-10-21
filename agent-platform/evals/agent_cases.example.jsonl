@@ -1,0 +1,2 @@
+{"id":"weather.basic","query":"常州天气怎么样？","expected_tools":["weather"],"forbidden_tools":["delete_account","shell_exec"],"answer_contains":["晴"],"min_path_score":1.0,"max_tool_calls":1,"require_status":"completed"}
+{"id":"compliance.delegate","query":"查一下材料是否合规并给出结论","expected_tools":["knowledge_search","delegate_gov.compliance"],"forbidden_tools":["shell_exec"],"answer_contains":["合规"],"min_path_score":1.0,"max_tool_calls":2,"require_status":"completed"}

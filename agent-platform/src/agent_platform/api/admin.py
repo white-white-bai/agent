@@ -58,6 +58,7 @@ from agent_platform.checkpoint.factory import build_checkpointer
 from agent_platform.core import metrics
 from agent_platform.core.accounts import AdminPrincipal
 from agent_platform.core.config import get_settings
+from agent_platform.core.notifications import notify_hitl
 from agent_platform.engine.builder import build_graph
 from agent_platform.engine.context import EngineContext
 from agent_platform.engine.runtime import run_node, stream_graph
@@ -324,6 +325,17 @@ async def run_agent_stream(
                 thread_id=thread_id,
                 tenant_code=app_row.tenant_code,
             ):
+                if item.get("type") == "agent_interrupt":
+                    await notify_hitl(
+                        "agent.interrupt",
+                        {
+                            "thread_id": thread_id,
+                            "app_uuid": app_uuid,
+                            "resume_endpoint": f"/admin/apps/{app_uuid}/agent/resume",
+                            "interrupt": item,
+                        },
+                        get_settings(),
+                    )
                 yield f"data: {json.dumps(item, ensure_ascii=False, default=str)}\n\n"
         except Exception as exc:  # noqa: BLE001 - 流式接口要把错误作为事件回传，不能直接抛
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)}, ensure_ascii=False)}\n\n"
@@ -368,6 +380,17 @@ async def resume_agent_run(
                 thread_id=request.conversation_id,
                 tenant_code=app_row.tenant_code,
             ):
+                if item.get("type") == "agent_interrupt":
+                    await notify_hitl(
+                        "agent.interrupt",
+                        {
+                            "thread_id": request.conversation_id,
+                            "app_uuid": app_uuid,
+                            "resume_endpoint": f"/admin/apps/{app_uuid}/agent/resume",
+                            "interrupt": item,
+                        },
+                        get_settings(),
+                    )
                 yield f"data: {json.dumps(item, ensure_ascii=False, default=str)}\n\n"
         except Exception as exc:  # noqa: BLE001
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)}, ensure_ascii=False)}\n\n"
@@ -1488,6 +1511,16 @@ async def run_graph_stream(
                     services.update_run(
                         thread_id, status=status, interrupt_payload=item, if_status=("running",)
                     )
+                    await notify_hitl(
+                        "graph.interrupt",
+                        {
+                            "thread_id": thread_id,
+                            "app_uuid": app_uuid,
+                            "resume_endpoint": f"/admin/runs/{thread_id}/resume",
+                            "interrupt": item,
+                        },
+                        settings,
+                    )
                 elif hitl and item.get("type") == "error":
                     status = "failed"
                     services.update_run(
@@ -1618,6 +1651,16 @@ async def resume_run(
                     status = "interrupted"
                     services.update_run(
                         thread_id, status=status, interrupt_payload=item, if_status=("running",)
+                    )
+                    await notify_hitl(
+                        "graph.interrupt",
+                        {
+                            "thread_id": thread_id,
+                            "app_uuid": run.app_uuid,
+                            "resume_endpoint": f"/admin/runs/{thread_id}/resume",
+                            "interrupt": item,
+                        },
+                        get_settings(),
                     )
                 elif item.get("type") == "error":
                     status = "failed"
