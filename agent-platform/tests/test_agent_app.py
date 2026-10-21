@@ -235,6 +235,14 @@ async def test_build_agent_tools_discovers_mcp_tools(monkeypatch):
     assert echo.description == "回显"
     assert await echo.ainvoke({"text": "hi"}) == {"name": "mcp.echo", "args": {"text": "hi"}}
 
+    filtered, _ = await agent_tools.build_agent_tools(
+        AgentAppDef(mcp_servers=["demo"], mcp_tool_allowlist=["other.tool"]),
+        Settings(),
+        _ctx(FakeToolChatModel(responses=[AIMessage("x")])),
+        tenant_code="t",
+    )
+    assert all(tool.name != "mcp.echo" for tool in filtered)
+
 
 # --------------------------------------------------------------------------- 运行时
 

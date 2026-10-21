@@ -47,6 +47,7 @@ const form = reactive({
   opening_statement: '',
   tool_names: [],
   mcp_servers: [],
+  mcp_tool_allowlist_text: '',
   knowledge_as_tool: true,
   browser: false,
   browser_allowed_hosts: '',
@@ -77,6 +78,10 @@ function buildDefinition() {
     opening_statement: form.opening_statement,
     tools: form.tool_names.map((name) => ({ name })),
     mcp_servers: form.mcp_servers,
+    mcp_tool_allowlist: form.mcp_tool_allowlist_text
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean),
     knowledge: {
       retriever: form.retriever,
       dataset_ids: form.dataset_ids,
@@ -115,6 +120,7 @@ function applyDefinition(definition) {
     opening_statement: def.opening_statement || '',
     tool_names: (def.tools || []).map((item) => item.name),
     mcp_servers: def.mcp_servers || [],
+    mcp_tool_allowlist_text: (def.mcp_tool_allowlist || []).join(', '),
     knowledge_as_tool: def.knowledge_as_tool ?? true,
     browser: Boolean(def.browser),
     browser_allowed_hosts: def.browser_allowed_hosts || '',
@@ -344,6 +350,9 @@ onMounted(async () => {
             <el-select v-model="form.mcp_servers" multiple clearable style="width: 100%">
               <el-option v-for="item in mcpOptions" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
+          </el-form-item>
+          <el-form-item label="MCP 动态工具白名单（逗号分隔，留空不限制）">
+            <el-input v-model="form.mcp_tool_allowlist_text" placeholder="search,read_file" />
           </el-form-item>
           <el-form-item label="知识库">
             <el-select v-model="form.dataset_ids" multiple clearable style="width: 100%">

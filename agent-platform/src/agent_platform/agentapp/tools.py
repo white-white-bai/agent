@@ -229,7 +229,11 @@ def agent_def_from_spec(spec: Any) -> AgentAppDef:
 
 
 async def _append_mcp_tools(
-    server_name: str, settings: Settings, tenant_code: str, tools: list[StructuredTool]
+    server_name: str,
+    settings: Settings,
+    tenant_code: str,
+    tools: list[StructuredTool],
+    allowlist: set[str] | None = None,
 ) -> None:
     """从 MCP Server 动态发现工具（tools/list），失败只记日志、不阻断 agent。"""
     spec = _server_spec(settings, server_name, tenant_code)
@@ -251,6 +255,8 @@ async def _append_mcp_tools(
     for item in definitions or []:
         name = str(item.get("name") or "")
         if not name:
+            continue
+        if allowlist and name not in allowlist:
             continue
 
         async def _run(_name: str = name, **kwargs: Any) -> Any:
@@ -305,5 +311,11 @@ async def build_agent_tools(
             )
         )
     for server_name in agent_def.mcp_servers:
-        await _append_mcp_tools(server_name, settings, tenant_code, tools)
+        await _append_mcp_tools(
+            server_name,
+            settings,
+            tenant_code,
+            tools,
+            allowlist=set(agent_def.mcp_tool_allowlist or []),
+        )
     return tools, sink

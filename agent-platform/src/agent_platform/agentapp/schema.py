@@ -61,6 +61,8 @@ class AgentAppDef(BaseModel):
     tools: list[AgentToolRef] = Field(default_factory=list)
     # 动态发现工具的 MCP Server 名单（ap_mcp_server.name / AP_TOOL_SERVERS 的 key）
     mcp_servers: list[str] = Field(default_factory=list)
+    # 动态发现后的工具白名单；空 = 不额外限制
+    mcp_tool_allowlist: list[str] = Field(default_factory=list)
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     knowledge_as_tool: bool = True
     browser: bool = False
