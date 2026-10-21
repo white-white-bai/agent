@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 
 from agent_platform.agentapp.schema import AgentAppDef
 from agent_platform.core.db import session_scope
@@ -18,6 +19,7 @@ from agent_platform.domain.models import (
     Conversation,
     Graph,
     GraphVersion,
+    HitlAction,
     McpServer,
     Message,
     PromptTemplate,
@@ -641,6 +643,25 @@ def claim_run(thread_id: str, resolved_by: str = "") -> bool:
             )
         )
         return int(result.rowcount or 0) == 1
+
+
+def claim_hitl_action(kind: str, thread_id: str, interrupt_id: str, decision: str) -> bool:
+    """跨进程幂等：同一 interrupt 的第一个审批决策成功，后续返回 False。"""
+    try:
+        with session_scope() as session:
+            session.add(
+                HitlAction(
+                    uuid=_new_uuid(),
+                    kind=kind,
+                    thread_id=thread_id,
+                    interrupt_id=interrupt_id,
+                    decision=decision,
+                )
+            )
+            session.flush()
+        return True
+    except IntegrityError:
+        return False
 
 
 def cancel_run(thread_id: str, resolved_by: str = "") -> bool:

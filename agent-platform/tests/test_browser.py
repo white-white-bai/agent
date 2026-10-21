@@ -1,6 +1,8 @@
 """可选浏览器工具：URL 安全边界、工具装配、无 Playwright 时失败关闭。"""
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -52,6 +54,45 @@ class _FakeLocator:
     async def inner_text(self) -> str:
         return "页面正文"
 
+    async def click(self) -> None:
+        return None
+
+    @property
+    def first(self) -> _FakeLocator:
+        return self
+
+
+class _FakeDownload:
+    suggested_filename = "result.csv"
+
+    async def save_as(self, path: str) -> None:
+        await asyncio.to_thread(Path(path).write_text, "a,b\n1,2\n", encoding="utf-8")
+
+
+class _Awaitable:
+    def __init__(self, value) -> None:
+        self._value = value
+
+    def __await__(self):
+        async def _get():
+            return self._value
+
+        return _get().__await__()
+
+
+class _FakeInfo:
+    def __init__(self, download: _FakeDownload) -> None:
+        self.value = _Awaitable(download)
+
+
+class _FakeDownloadContext:
+    async def __aenter__(self) -> _FakeInfo:
+        self.info = _FakeInfo(_FakeDownload())
+        return self.info
+
+    async def __aexit__(self, *args) -> None:
+        return None
+
 
 class _FakePage:
     url = "https://example.com/page"
@@ -68,6 +109,9 @@ class _FakePage:
     def locator(self, selector: str) -> _FakeLocator:
         return _FakeLocator()
 
+    def expect_download(self) -> _FakeDownloadContext:
+        return _FakeDownloadContext()
+
 
 @pytest.mark.asyncio
 async def test_browser_session_snapshot_with_fake_page():
@@ -78,6 +122,19 @@ async def test_browser_session_snapshot_with_fake_page():
 
     assert "TITLE: 示例页" in snapshot
     assert "页面正文" in snapshot
+
+
+@pytest.mark.asyncio
+async def test_browser_download_saves_file(tmp_path):
+    session = browser.BrowserSession(
+        SimpleNamespace(browser_download_dir=str(tmp_path), browser_max_chars=100)
+    )
+    session._page = _FakePage()
+
+    path = await session.download("#export")
+
+    assert path.endswith("result.csv")
+    assert Path(path).read_text(encoding="utf-8").startswith("a,b")
 
 
 @pytest.mark.asyncio

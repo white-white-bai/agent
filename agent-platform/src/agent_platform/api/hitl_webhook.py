@@ -55,6 +55,8 @@ async def _resume_graph(
     interrupt_id = str(payload["interrupt_id"])
     if graph_interrupt_id(run.interrupt_payload or {}) != interrupt_id:
         raise HTTPException(status_code=409, detail="审批已失效：中断 id 不匹配")
+    if not services.claim_hitl_action("graph", thread_id, interrupt_id, decision):
+        raise HTTPException(status_code=409, detail="审批已使用")
     if not services.claim_run(thread_id, "webhook"):
         raise HTTPException(status_code=409, detail="当前运行已被其他请求恢复")
     try:
@@ -138,6 +140,10 @@ async def _resume_agent_app(
         raise HTTPException(status_code=409, detail="当前会话不在等待审批状态")
     if str(pending.get("interrupt_id") or "") != str(payload["interrupt_id"]):
         raise HTTPException(status_code=409, detail="审批已失效：中断 id 不匹配")
+    if not services.claim_hitl_action(
+        "agent", thread_id, str(payload["interrupt_id"]), decision
+    ):
+        raise HTTPException(status_code=409, detail="审批已使用")
     answer = ""
     status = "completed"
     async for item in resume_agent(

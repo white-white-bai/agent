@@ -404,6 +404,24 @@ class Run(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
+class HitlAction(Base):
+    """外部审批回调幂等记录：同一 interrupt 只允许一个决策落库。"""
+
+    __tablename__ = "ap_hitl_action"
+    __table_args__ = (
+        UniqueConstraint("kind", "thread_id", "interrupt_id", name="uk_ap_hitl_action_interrupt"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    kind: Mapped[str] = mapped_column(String(16))
+    thread_id: Mapped[str] = mapped_column(String(128), index=True)
+    interrupt_id: Mapped[str] = mapped_column(String(128))
+    decision: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16), default="claimed")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
 class UserMemory(Base):
     """用户级长期记忆条目：按租户 + 应用 + 用户隔离。"""
 

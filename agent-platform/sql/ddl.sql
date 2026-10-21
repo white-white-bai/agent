@@ -389,6 +389,21 @@ CREATE TABLE IF NOT EXISTS ap_run (
     KEY idx_ap_run_app (app_uuid)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '管理端图运行记录（HITL 中断/恢复）';
 
+CREATE TABLE IF NOT EXISTS ap_hitl_action (
+    id           BIGINT       NOT NULL AUTO_INCREMENT,
+    uuid         VARCHAR(64)  NOT NULL,
+    kind         VARCHAR(16)  NOT NULL,
+    thread_id    VARCHAR(128) NOT NULL,
+    interrupt_id VARCHAR(128) NOT NULL,
+    decision     VARCHAR(16)  NOT NULL,
+    status       VARCHAR(16)  NOT NULL DEFAULT 'claimed',
+    created_at   DATETIME     NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_ap_hitl_action_uuid (uuid),
+    UNIQUE KEY uk_ap_hitl_action_interrupt (kind, thread_id, interrupt_id),
+    KEY idx_ap_hitl_action_thread (thread_id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'HITL 外部审批回调幂等记录';
+
 CREATE TABLE IF NOT EXISTS ap_user_memory (
     id                     BIGINT       NOT NULL AUTO_INCREMENT,
     uuid                   VARCHAR(64)  NOT NULL,

@@ -104,6 +104,12 @@ def test_hitl_webhook_rejects_unknown_decision(api_client, monkeypatch):
     assert response.status_code == 400
 
 
+def test_claim_hitl_action_is_cross_request_idempotent():
+    assert services.claim_hitl_action("graph", "thread-x", "int-x", "approve") is True
+    assert services.claim_hitl_action("graph", "thread-x", "int-x", "reject") is False
+    assert services.claim_hitl_action("graph", "thread-x", "int-y", "approve") is True
+
+
 def test_hitl_webhook_agent_route(api_client, monkeypatch):
     monkeypatch.setattr(
         webhook_mod, "get_settings", lambda: Settings(hitl_webhook_secret="secret")

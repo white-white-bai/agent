@@ -92,6 +92,8 @@ class Settings(BaseSettings):
     browser_allowed_hosts: str = ""
     browser_allow_private: bool = False
     browser_screenshot_dir: str = ".run/browser"
+    browser_download_dir: str = ".run/downloads"
+    browser_storage_state: str = ""
 
     # MCP 工具运行时发现：默认关闭，关闭时只用 ap_tool 声明
     tool_discovery_enabled: bool = False

@@ -92,7 +92,11 @@ class BrowserSession:
             self._browser = await self._pw.chromium.launch(
                 headless=bool(getattr(self.settings, "browser_headless", True))
             )
-            self._context = await self._browser.new_context(ignore_https_errors=False)
+            context_kwargs: dict[str, Any] = {"ignore_https_errors": False, "accept_downloads": True}
+            state_path = str(getattr(self.settings, "browser_storage_state", "") or "")
+            if state_path and Path(state_path).exists():
+                context_kwargs["storage_state"] = state_path
+            self._context = await self._browser.new_context(**context_kwargs)
             self._page = await self._context.new_page()
             self._page.set_default_timeout(int(getattr(self.settings, "browser_timeout_ms", 15000) or 15000))
         except BrowserError:
@@ -102,6 +106,13 @@ class BrowserSession:
             raise BrowserUnavailable(f"浏览器启动失败: {exc}") from exc
 
     async def close(self) -> None:
+        state_path = str(getattr(self.settings, "browser_storage_state", "") or "")
+        if state_path and self._context is not None:
+            try:
+                Path(state_path).parent.mkdir(parents=True, exist_ok=True)
+                await self._context.storage_state(path=state_path)
+            except Exception:
+                logger.warning("保存浏览器登录态失败：%s", state_path, exc_info=True)
         for name in ("_context", "_browser", "_pw"):
             obj = getattr(self, name, None)
             setattr(self, name, None)
@@ -156,6 +167,18 @@ class BrowserSession:
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"{uuid.uuid4().hex}.png"
         await page.screenshot(path=str(path), full_page=True)
+        return str(path)
+
+    async def download(self, selector: str) -> str:
+        page = await self.page()
+        async with page.expect_download() as info:
+            await page.locator(selector).first.click()
+        download = await info.value
+        directory = Path(str(getattr(self.settings, "browser_download_dir", ".run/downloads") or ".run/downloads"))
+        directory.mkdir(parents=True, exist_ok=True)
+        name = str(getattr(download, "suggested_filename", "") or f"{uuid.uuid4().hex}.bin")
+        path = directory / name
+        await download.save_as(str(path))
         return str(path)
 
 
@@ -217,6 +240,10 @@ def build_browser_tools(
         session = await get_session(thread_id, settings)
         return _wrap(await session.screenshot(), "browser_screenshot")
 
+    async def _download(selector: str) -> Any:
+        session = await get_session(thread_id, settings)
+        return _wrap(await session.download(selector), "browser_download")
+
     return [
         StructuredTool.from_function(
             coroutine=_open,
@@ -259,5 +286,13 @@ def build_browser_tools(
             coroutine=_screenshot,
             name="browser_screenshot",
             description="截取当前页面并返回截图文件路径。",
+        ),
+        StructuredTool.from_function(
+            coroutine=_download,
+            name="browser_download",
+            description="点击 selector 触发下载并返回保存路径（适合 CSV 等附件）。",
+            args_schema=create_model(
+                "browser_download_args", selector=(str, Field(..., description="触发下载的 CSS selector"))
+            ),
         ),
     ]

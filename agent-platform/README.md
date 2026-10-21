@@ -212,7 +212,7 @@ start → 意图识别 → 知识检索 → 内容生成 → 合规质检 → �
 - **Human-in-the-loop**：`hitl.policy` = `off`（默认）/ `before_all_tools` / `before_listed`。命中策略的工具调用前 `interrupt` 暂停本轮，对外 SSE 仍以**正常的 `message_end`**返回审批提示（不引入未知事件，兼容链路安全）；管理端 `POST /admin/apps/{uuid}/agent/resume` 以 `Command(resume=...)` 批准/拒绝续跑。会话存在待审批中断时，新一轮不静默续跑。
 - **外部审批通知**：配置 `AP_HITL_WEBHOOK_URL` 后，图运行与 Agent 应用中断时向 Webhook POST `{event, payload}`（含 `thread_id` / `app_uuid` / `resume_endpoint` / 中断载荷）；`AP_HITL_WEBHOOK_SECRET` 作为 `X-Webhook-Secret` 发送。通知失败只记日志，不阻断审批和 SSE。
 - **不可信内容隔离**：开启 `AP_PROMPT_GUARD_ENABLED=true` 后，声明式工具、MCP 动态工具、知识检索、子 Agent 返回文本，以及图内 agent 模式的工具观察，都会先剥离常见指令注入，再用 `<untrusted_data>` 边界包裹后送入模型；`AP_PROMPT_GUARD_MAX_CHARS` 控制截断长度。默认关闭，避免改变既有输出。
-- **浏览器操作（可选）**：Agent 定义里 `browser=true` 且 `AP_BROWSER_ENABLED=true` 时，装配 `browser_open` / `browser_click` / `browser_fill` / `browser_press` / `browser_text` / `browser_screenshot` 工具。需要先 `pip install -e ".[browser]"` 并 `playwright install chromium`；同一 `thread_id` 复用页面，运行结束自动关闭。URL 只允许 http/https，默认拦截 localhost/私网/链路本地 IP；生产建议配置 `AP_BROWSER_ALLOWED_HOSTS` 白名单，必要时才开 `AP_BROWSER_ALLOW_PRIVATE`。
+- **浏览器操作（可选）**：Agent 定义里 `browser=true` 且 `AP_BROWSER_ENABLED=true` 时，装配 `browser_open` / `browser_click` / `browser_fill` / `browser_press` / `browser_text` / `browser_screenshot` / `browser_download` 工具。需要先 `pip install -e ".[browser]"` 并 `playwright install chromium`；同一 `thread_id` 复用页面，运行结束自动关闭。`AP_BROWSER_STORAGE_STATE` 可持久化登录态（cookie/localStorage，注意文件权限），`AP_BROWSER_DOWNLOAD_DIR` 指定下载目录。URL 只允许 http/https，默认拦截 localhost/私网/链路本地 IP；生产建议配置 `AP_BROWSER_ALLOWED_HOSTS` 白名单，必要时才开 `AP_BROWSER_ALLOW_PRIVATE`。
 - **入口**：`/v1/chat-messages`（含 transfer 链路）按 `app_type` 分叉到 `stream_agent`，产出与图一致的 `token` / `final` 事件；`runWorkflow` / `/v1/workflows/run` 同步分叉。
 
 **管理端接口**（权限点 `agent:read` / `agent:write`）
@@ -454,11 +454,12 @@ python -m agent_platform.worker.main
 - 外部一键审批：配置 `AP_HITL_WEBHOOK_SECRET` 后，Webhook payload 的 `approval` 带 HMAC-SHA256 签名 token
   （绑定 kind/app/thread/interrupt，默认 24h 过期）及 `approve_url` / `reject_url`；
   `POST /webhooks/hitl/approve|reject` body `{token, edits?}` 无需管理端登录。token 中的 interrupt id 必须与当前
-  待审批中断一致，图运行恢复使用原子 `claim_run`；Agent 会话使用进程内锁 + 中断态校验，多副本部署如需严格幂等应再接共享存储。
+  待审批中断一致；图运行恢复使用原子 `claim_run`，所有回调还会写 `ap_hitl_action` 唯一约束，
+  同一 interrupt 的第二个决策（含多进程并发）返回 409。
 - **对外 `/v1`、云智链路不暴露 interrupt**：审批节点在外部链路按 `default_action` 自动通过，仍以
   `message`/`message_end` 收尾，Java/前端协议零改动。
 - `interrupt()` 恢复会从头重跑审批节点，审批节点只做纯表达式求值；不要在审批节点前放不可重入的副作用。
-- 老库执行 `sql/migrate_checkpoint_hitl.sql` + `sql/migrate_runs.sql`；`checkpoint`/`metadata`/`value` 必须是
+- 老库执行 `sql/migrate_checkpoint_hitl.sql` + `sql/migrate_runs.sql` + `sql/migrate_hitl_action.sql`；`checkpoint`/`metadata`/`value` 必须是
   `LONGBLOB`，`ap_checkpoint` 必须有 `metadata_type`，`ap_checkpoint_write` 必须有 `task_path`。
 
 ## 动态子图（默认关闭）
