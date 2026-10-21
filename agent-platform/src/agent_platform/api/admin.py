@@ -1685,6 +1685,44 @@ async def run_graph_stream(
     )
 
 
+@router.get("/hitl-actions", dependencies=[Depends(require_permission("graph:read"))])
+def list_hitl_action_logs(
+    tenant_code: str = "",
+    kind: str = "",
+    thread_id: str = "",
+    page: int = 1,
+    size: int = 20,
+    principal: AdminPrincipal = Depends(get_current_admin),
+) -> dict[str, Any]:
+    rows, total = services.list_hitl_actions(
+        _tenant(principal, tenant_code),
+        kind=kind,
+        thread_id=thread_id,
+        page=page,
+        size=size,
+    )
+    return {
+        "data": {
+            "items": [
+                {
+                    "uuid": row.uuid,
+                    "tenant_code": row.tenant_code,
+                    "kind": row.kind,
+                    "thread_id": row.thread_id,
+                    "interrupt_id": row.interrupt_id,
+                    "decision": row.decision,
+                    "status": row.status,
+                    "created_at": _iso(row.created_at),
+                }
+                for row in rows
+            ],
+            "total": total,
+            "page": page,
+            "size": size,
+        }
+    }
+
+
 @router.get("/runs", dependencies=[Depends(require_permission("graph:read"))])
 def list_runs(
     tenant_code: str = "",

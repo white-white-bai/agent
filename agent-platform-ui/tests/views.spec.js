@@ -68,6 +68,7 @@ vi.mock('@/api', () => ({
   getRun: vi.fn(async () => ({})),
   resumeRun: vi.fn(async () => ({})),
   cancelRun: vi.fn(async () => ({})),
+  listHitlActions: vi.fn(async () => ({ items: [], total: 0 })),
   getMemoryConfig: vi.fn(async () => ({ enabled: false, write_enabled: false, recall_enabled: false })),
   listUserMemories: vi.fn(async () => ({ items: [], total: 0 })),
   aggregateUserMemories: vi.fn(async () => ({ user_key: 'u1', apps: [], total: 0 })),

@@ -427,6 +427,7 @@ CREATE TABLE IF NOT EXISTS ap_hitl_outbox (
 CREATE TABLE IF NOT EXISTS ap_hitl_action (
     id           BIGINT       NOT NULL AUTO_INCREMENT,
     uuid         VARCHAR(64)  NOT NULL,
+    tenant_code  VARCHAR(64)  NOT NULL DEFAULT '',
     kind         VARCHAR(16)  NOT NULL,
     thread_id    VARCHAR(128) NOT NULL,
     interrupt_id VARCHAR(128) NOT NULL,
@@ -436,7 +437,8 @@ CREATE TABLE IF NOT EXISTS ap_hitl_action (
     PRIMARY KEY (id),
     UNIQUE KEY uk_ap_hitl_action_uuid (uuid),
     UNIQUE KEY uk_ap_hitl_action_interrupt (kind, thread_id, interrupt_id),
-    KEY idx_ap_hitl_action_thread (thread_id)
+    KEY idx_ap_hitl_action_thread (thread_id),
+    KEY idx_ap_hitl_action_tenant (tenant_code)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT 'HITL 外部审批回调幂等记录';
 
 CREATE TABLE IF NOT EXISTS ap_user_memory (

@@ -110,6 +110,19 @@ def test_claim_hitl_action_is_cross_request_idempotent():
     assert services.claim_hitl_action("graph", "thread-x", "int-y", "approve") is True
 
 
+def test_hitl_actions_endpoint_filters_tenant(api_client):
+    services.claim_hitl_action("graph", "thread-t", "int-t", "approve", tenant_code="t")
+    services.claim_hitl_action("graph", "thread-o", "int-o", "reject", tenant_code="other")
+
+    response = api_client.get("/admin/hitl-actions", params={"tenant_code": "t"})
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["total"] == 1
+    assert data["items"][0]["thread_id"] == "thread-t"
+    assert data["items"][0]["decision"] == "approve"
+
+
 def test_hitl_webhook_agent_route(api_client, monkeypatch):
     monkeypatch.setattr(
         webhook_mod, "get_settings", lambda: Settings(hitl_webhook_secret="secret")

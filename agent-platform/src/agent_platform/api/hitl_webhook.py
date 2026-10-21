@@ -55,7 +55,9 @@ async def _resume_graph(
     interrupt_id = str(payload["interrupt_id"])
     if graph_interrupt_id(run.interrupt_payload or {}) != interrupt_id:
         raise HTTPException(status_code=409, detail="审批已失效：中断 id 不匹配")
-    if not services.claim_hitl_action("graph", thread_id, interrupt_id, decision):
+    if not services.claim_hitl_action(
+        "graph", thread_id, interrupt_id, decision, tenant_code=run.tenant_code
+    ):
         raise HTTPException(status_code=409, detail="审批已使用")
     if not services.claim_run(thread_id, "webhook"):
         raise HTTPException(status_code=409, detail="当前运行已被其他请求恢复")
@@ -141,7 +143,7 @@ async def _resume_agent_app(
     if str(pending.get("interrupt_id") or "") != str(payload["interrupt_id"]):
         raise HTTPException(status_code=409, detail="审批已失效：中断 id 不匹配")
     if not services.claim_hitl_action(
-        "agent", thread_id, str(payload["interrupt_id"]), decision
+        "agent", thread_id, str(payload["interrupt_id"]), decision, tenant_code=app_row.tenant_code
     ):
         raise HTTPException(status_code=409, detail="审批已使用")
     answer = ""

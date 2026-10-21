@@ -66,6 +66,7 @@ describe('api endpoint map', () => {
     ['listRuns', () => api.listRuns({ status: 'interrupted' }), '/admin/runs', { params: { status: 'interrupted' } }],
     ['getRun', () => api.getRun('t1'), '/admin/runs/t1', undefined],
     ['cancelRun', () => api.cancelRun('t1'), '/admin/runs/t1/cancel', { method: 'POST' }],
+    ['listHitlActions', () => api.listHitlActions({ kind: 'graph' }), '/admin/hitl-actions', { params: { kind: 'graph' } }],
     ['getMemoryConfig', () => api.getMemoryConfig(), '/admin/memory/config', undefined],
     ['listUserMemories', () => api.listUserMemories({ user_key: 'u' }), '/admin/user-memories', { params: { user_key: 'u' } }],
     ['aggregateUserMemories', () => api.aggregateUserMemories({ user_key: 'u' }), '/admin/user-memories/aggregate', { params: { user_key: 'u' } }],

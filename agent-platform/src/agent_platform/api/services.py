@@ -645,13 +645,16 @@ def claim_run(thread_id: str, resolved_by: str = "") -> bool:
         return int(result.rowcount or 0) == 1
 
 
-def claim_hitl_action(kind: str, thread_id: str, interrupt_id: str, decision: str) -> bool:
+def claim_hitl_action(
+    kind: str, thread_id: str, interrupt_id: str, decision: str, tenant_code: str = ""
+) -> bool:
     """跨进程幂等：同一 interrupt 的第一个审批决策成功，后续返回 False。"""
     try:
         with session_scope() as session:
             session.add(
                 HitlAction(
                     uuid=_new_uuid(),
+                    tenant_code=tenant_code,
                     kind=kind,
                     thread_id=thread_id,
                     interrupt_id=interrupt_id,
@@ -662,6 +665,33 @@ def claim_hitl_action(kind: str, thread_id: str, interrupt_id: str, decision: st
         return True
     except IntegrityError:
         return False
+
+
+def list_hitl_actions(
+    tenant_code: str = "",
+    *,
+    kind: str = "",
+    thread_id: str = "",
+    page: int = 1,
+    size: int = 20,
+) -> tuple[list[HitlAction], int]:
+    page = max(int(page or 1), 1)
+    size = min(max(int(size or 20), 1), 200)
+    with session_scope() as session:
+        stmt = select(HitlAction)
+        if tenant_code:
+            stmt = stmt.where(HitlAction.tenant_code == tenant_code)
+        if kind:
+            stmt = stmt.where(HitlAction.kind == kind)
+        if thread_id:
+            stmt = stmt.where(HitlAction.thread_id == thread_id)
+        total = int(session.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
+        rows = list(
+            session.scalars(
+                stmt.order_by(HitlAction.id.desc()).offset((page - 1) * size).limit(size)
+            ).all()
+        )
+        return rows, total
 
 
 def cancel_run(thread_id: str, resolved_by: str = "") -> bool:

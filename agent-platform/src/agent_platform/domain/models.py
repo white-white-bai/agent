@@ -448,6 +448,7 @@ class HitlAction(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     uuid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    tenant_code: Mapped[str] = mapped_column(String(64), index=True, default="")
     kind: Mapped[str] = mapped_column(String(16))
     thread_id: Mapped[str] = mapped_column(String(128), index=True)
     interrupt_id: Mapped[str] = mapped_column(String(128))

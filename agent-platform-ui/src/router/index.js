@@ -64,6 +64,12 @@ export const MENU_PAGES = [
     meta: { title: '运行记录', icon: 'VideoPlay', permission: 'graph:read' },
   },
   {
+    path: '/hitl-audits',
+    name: 'hitl-audits',
+    component: () => import('@/views/HitlAuditsView.vue'),
+    meta: { title: '审批审计', icon: 'CircleCheck', permission: 'graph:read' },
+  },
+  {
     path: '/guards',
     name: 'guards',
     component: () => import('@/views/GuardsView.vue'),
