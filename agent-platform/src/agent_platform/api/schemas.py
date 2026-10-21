@@ -314,6 +314,15 @@ class UserMemoryPurgeRequest(BaseModel):
     user_key: str = ""
 
 
+class UserMemoryMigrateRequest(BaseModel):
+    tenant_code: str = ""
+    source_user_key: str
+    target_user_key: str
+    source_app_uuid: str = ""
+    target_app_uuid: str = ""
+    delete_source: bool = False
+
+
 # --------------------------------------------------------------------------- 管理端账号
 
 class LoginRequest(BaseModel):

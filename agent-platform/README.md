@@ -240,9 +240,15 @@ python scripts/eval_agent_traces.py \
 # 失败返回 1，可直接接 CI；--json 输出结构化报告
 ```
 
-录制真实运行（服务已启动、Agent 已发布；`--cases` 至少含 `id` / `query`）：
+录制真实运行（服务已启动、Agent 已发布）：
 
 ```bash
+# 1) 从 ap_message 导出真实用户 query（默认 100 条）
+python scripts/export_agent_queries.py \
+  --tenant-code <tenant> --app-uuid <uuid> --limit 100 \
+  --out evals/queries.jsonl
+
+# 2) 逐条调用已发布 Agent，落成轨迹
 python scripts/record_agent_trace.py \
   --app-uuid <uuid> --cases evals/queries.jsonl \
   --out evals/recorded_traces.jsonl
@@ -428,9 +434,10 @@ python -m agent_platform.worker.main
   命中写入 `inputs.user_memory`（结构化）与 `inputs.user_memory_text`（文本）；autonomous 模式自动把后者注入 system 消息，
   其它模式可在提示词里写 `{{ user_memory_text }}`。
 - 管理端：`GET /admin/user-memories`、`GET /admin/user-memories/users`、`GET /admin/user-memories/aggregate`、
+  `GET /admin/user-memories/export`、`POST /admin/user-memories/migrate`、
   `POST|PUT|DELETE /admin/user-memories*`、`POST /admin/user-memories/recall`、`POST /admin/user-memories/purge`、
   `POST /admin/user-memories/rebuild-embeddings`、`GET /admin/memory/config`；
-  前端「用户记忆」页支持筛选、增删改、召回测试、按用户物理清除、按当前模型重建向量，以及按用户跨应用汇总。
+  前端「用户记忆」页支持筛选、增删改、召回测试、按用户物理清除、按当前模型重建向量、按用户跨应用汇总，以及 JSON 导出/批量迁移。
 - 隐私：`request.user` 目前是客户端自报，生产必须由网关注入可信 user 并开启管理端鉴权；`purge` 会物理删除
   记忆与水位线；召回按当前 `AP_EMBEDDING_MODEL` / `AP_EMBEDDING_DIM` 过滤失效向量，修改模型或维度后
   用 `rebuild-embeddings` 重建（可限定 `user_key` / `app_uuid`）。

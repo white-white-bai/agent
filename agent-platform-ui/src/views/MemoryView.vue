@@ -6,9 +6,11 @@ import {
   aggregateUserMemories,
   createUserMemory,
   deleteUserMemory,
+  exportUserMemories,
   getMemoryConfig,
   listMemoryUsers,
   listUserMemories,
+  migrateUserMemories,
   purgeUserMemories,
   recallUserMemory,
   rebuildUserMemoryEmbeddings,
@@ -48,6 +50,16 @@ const aggregateVisible = ref(false)
 const aggregateUser = ref('')
 const aggregateApps = ref([])
 const aggregateTotal = ref(0)
+
+const migrateVisible = ref(false)
+const migrating = ref(false)
+const migrateForm = reactive({
+  source_user_key: '',
+  source_app_uuid: '',
+  target_user_key: '',
+  target_app_uuid: '',
+  delete_source: false,
+})
 
 const KINDS = ['fact', 'preference', 'episode']
 
@@ -187,6 +199,55 @@ async function openAggregate() {
   }
 }
 
+async function exportMemories() {
+  try {
+    const result = await exportUserMemories({
+      tenant_code: filters.tenant_code,
+      user_key: filters.user_key,
+      app_uuid: '',
+    })
+    const blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' })
+    const anchor = document.createElement('a')
+    anchor.href = URL.createObjectURL(blob)
+    anchor.download = `user-memories-${result.user_key || 'all'}.json`
+    anchor.click()
+    URL.revokeObjectURL(anchor.href)
+    ElMessage.success(`已导出 ${result.total || 0} 条`)
+  } catch (error) {
+    ElMessage.error(error.message || '导出失败')
+  }
+}
+
+function openMigrate() {
+  migrateForm.source_user_key = filters.user_key
+  migrateForm.source_app_uuid = ''
+  migrateForm.target_user_key = ''
+  migrateForm.target_app_uuid = ''
+  migrateForm.delete_source = false
+  migrateVisible.value = true
+}
+
+async function submitMigrate() {
+  if (!migrateForm.source_user_key.trim() || !migrateForm.target_user_key.trim()) {
+    ElMessage.warning('源用户和目标用户不能为空')
+    return
+  }
+  migrating.value = true
+  try {
+    const result = await migrateUserMemories({
+      tenant_code: filters.tenant_code,
+      ...migrateForm,
+    })
+    ElMessage.success(`已复制 ${result.upserted || 0} 条，删除源 ${result.deleted || 0} 条`)
+    migrateVisible.value = false
+    await reload()
+  } catch (error) {
+    ElMessage.error(error.message || '迁移失败')
+  } finally {
+    migrating.value = false
+  }
+}
+
 function openRecall(row) {
   recallForm.user_key = row ? row.user_key : filters.user_key
   recallForm.app_uuid = row ? row.app_uuid : ''
@@ -237,6 +298,8 @@ onMounted(loadMeta)
       <el-input v-model="filters.q" placeholder="内容关键词" class="toolbar__input" @keyup.enter="refresh" />
       <el-button @click="refresh">查询</el-button>
       <el-button @click="openAggregate">跨应用汇总</el-button>
+      <el-button @click="exportMemories">导出</el-button>
+      <el-button @click="openMigrate">批量迁移</el-button>
       <el-button v-if="auth.can('memory:write')" type="primary" @click="openCreate">新增记忆</el-button>
       <el-button v-if="auth.can('memory:write')" type="danger" plain @click="purge">按用户清除</el-button>
       <el-button v-if="auth.can('memory:write')" @click="rebuildEmbeddings">重建向量</el-button>
@@ -326,6 +389,30 @@ onMounted(loadMeta)
       </el-table>
       <template #footer>
         <el-button @click="aggregateVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="migrateVisible" title="批量迁移记忆" width="620px">
+      <el-form label-position="top">
+        <el-form-item label="源用户 user_key">
+          <el-input v-model="migrateForm.source_user_key" />
+        </el-form-item>
+        <el-form-item label="源应用 uuid（留空表示全部应用）">
+          <el-input v-model="migrateForm.source_app_uuid" />
+        </el-form-item>
+        <el-form-item label="目标用户 user_key">
+          <el-input v-model="migrateForm.target_user_key" />
+        </el-form-item>
+        <el-form-item label="目标应用 uuid（留空保留原应用）">
+          <el-input v-model="migrateForm.target_app_uuid" />
+        </el-form-item>
+        <el-form-item label="迁移后删除源记忆">
+          <el-switch v-model="migrateForm.delete_source" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="migrateVisible = false">取消</el-button>
+        <el-button type="primary" :loading="migrating" @click="submitMigrate">开始迁移</el-button>
       </template>
     </el-dialog>
   </div>

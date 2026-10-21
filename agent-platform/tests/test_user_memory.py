@@ -146,6 +146,49 @@ def test_aggregate_user_memories_by_app(api_client):
     assert {(item["app_uuid"], item["count"]) for item in data["apps"]} == {("a1", 1), ("a2", 1)}
 
 
+def test_export_and_migrate_user_memories(api_client):
+    settings = _settings()
+    store.create_memory(
+        tenant_code="t", app_uuid="a1", user_key="u1", kind="fact", content="应用一", settings=settings
+    )
+    store.create_memory(
+        tenant_code="t", app_uuid="a2", user_key="u1", kind="preference", content="应用二", settings=settings
+    )
+
+    exported = api_client.get(
+        "/admin/user-memories/export", params={"tenant_code": "t", "user_key": "u1"}
+    )
+    assert exported.status_code == 200
+    assert exported.json()["data"]["total"] == 2
+
+    migrated = api_client.post(
+        "/admin/user-memories/migrate",
+        json={
+            "tenant_code": "t",
+            "source_user_key": "u1",
+            "target_user_key": "u2",
+            "target_app_uuid": "b1",
+        },
+    )
+    assert migrated.status_code == 200
+    assert migrated.json()["data"] == {"exported": 2, "upserted": 2, "deleted": 0}
+    assert store.list_memories("t", user_key="u2", app_uuid="b1")[1] == 2
+    assert store.list_memories("t", user_key="u1")[1] == 2
+
+    moved = api_client.post(
+        "/admin/user-memories/migrate",
+        json={
+            "tenant_code": "t",
+            "source_user_key": "u1",
+            "target_user_key": "u3",
+            "delete_source": True,
+        },
+    )
+    assert moved.json()["data"]["deleted"] == 2
+    assert store.list_memories("t", user_key="u1")[1] == 0
+    assert store.list_memories("t", user_key="u3")[1] == 2
+
+
 def test_upsert_near_duplicate_merges_by_cosine_threshold():
     settings = _settings(embedding_dim=2, user_memory_dedup_threshold=0.9)
     first = store.upsert_memory(

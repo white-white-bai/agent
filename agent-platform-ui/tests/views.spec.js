@@ -70,6 +70,8 @@ vi.mock('@/api', () => ({
   getMemoryConfig: vi.fn(async () => ({ enabled: false, write_enabled: false, recall_enabled: false })),
   listUserMemories: vi.fn(async () => ({ items: [], total: 0 })),
   aggregateUserMemories: vi.fn(async () => ({ user_key: 'u1', apps: [], total: 0 })),
+  exportUserMemories: vi.fn(async () => ({ user_key: 'u1', items: [], total: 0 })),
+  migrateUserMemories: vi.fn(async () => ({ upserted: 0, deleted: 0 })),
   listMemoryUsers: vi.fn(async () => []),
   createUserMemory: vi.fn(async () => ({})),
   updateUserMemory: vi.fn(async () => ({})),
@@ -423,6 +425,8 @@ describe('MemoryView', () => {
     expect(wrapper.text()).toContain('喜欢简洁回答')
     expect(wrapper.text()).toContain('新增记忆')
     expect(wrapper.text()).toContain('跨应用汇总')
+    expect(wrapper.text()).toContain('导出')
+    expect(wrapper.text()).toContain('批量迁移')
     expect(wrapper.text()).toContain('总闸')
   })
 })

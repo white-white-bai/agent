@@ -49,6 +49,7 @@ from agent_platform.api.schemas import (
     SensitiveWordCreateRequest,
     ToolTestRequest,
     ToolUpsertRequest,
+    UserMemoryMigrateRequest,
     UserMemoryPurgeRequest,
     UserMemoryRecallRequest,
     UserMemoryUpsertRequest,
@@ -979,6 +980,48 @@ def aggregate_user_memories(
             "total": sum(int(item["count"]) for item in apps),
         }
     }
+
+
+@router.get("/user-memories/export", dependencies=[Depends(require_permission("memory:read"))])
+def export_user_memories(
+    tenant_code: str = "",
+    user_key: str = "",
+    app_uuid: str = "",
+    limit: int = 5000,
+    principal: AdminPrincipal = Depends(get_current_admin),
+) -> dict[str, Any]:
+    tenant = _tenant(principal, tenant_code)
+    items = memory_store.export_memories(
+        tenant, user_key=user_key, app_uuid=app_uuid, limit=limit
+    )
+    return {
+        "data": {
+            "version": 1,
+            "tenant_code": tenant,
+            "user_key": memory_store.normalize_user_key(user_key) if user_key else "",
+            "app_uuid": app_uuid,
+            "total": len(items),
+            "items": items,
+        }
+    }
+
+
+@router.post("/user-memories/migrate", dependencies=[Depends(require_permission("memory:write"))])
+def migrate_user_memories(
+    request: UserMemoryMigrateRequest, principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
+    try:
+        result = memory_store.migrate_memories(
+            _tenant(principal, request.tenant_code),
+            source_user_key=request.source_user_key,
+            target_user_key=request.target_user_key,
+            source_app_uuid=request.source_app_uuid,
+            target_app_uuid=request.target_app_uuid,
+            delete_source=request.delete_source,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"data": result}
 
 
 @router.get("/user-memories/users", dependencies=[Depends(require_permission("memory:read"))])

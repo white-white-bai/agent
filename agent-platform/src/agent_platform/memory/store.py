@@ -131,6 +131,96 @@ def aggregate_memories_by_app(tenant_code: str, user_key: str) -> list[dict[str,
         ]
 
 
+def export_memories(
+    tenant_code: str,
+    *,
+    user_key: str = "",
+    app_uuid: str = "",
+    limit: int = 5000,
+) -> list[dict[str, Any]]:
+    """导出用户记忆为可迁移 JSON 结构（含向量与来源，保留应用归属）。"""
+    with session_scope() as session:
+        stmt = select(UserMemory).where(
+            UserMemory.tenant_code == tenant_code,
+            UserMemory.is_deleted == 0,
+        )
+        if user_key:
+            stmt = stmt.where(UserMemory.user_key == normalize_user_key(user_key))
+        if app_uuid:
+            stmt = stmt.where(UserMemory.app_uuid == app_uuid)
+        rows = session.scalars(
+            stmt.order_by(UserMemory.updated_at.desc()).limit(max(int(limit or 5000), 1))
+        ).all()
+        return [
+            {
+                "uuid": row.uuid,
+                "user_key": row.user_key,
+                "user_name": row.user_name,
+                "app_uuid": row.app_uuid,
+                "kind": row.kind,
+                "content": row.content,
+                "importance": float(row.importance or 0),
+                "embedding": list(row.embedding or []),
+                "embedding_model": row.embedding_model,
+                "source_conversation_id": row.source_conversation_id,
+                "source_message_id": row.source_message_id,
+                "expires_at": row.expires_at.isoformat() if row.expires_at else "",
+                "enabled": int(row.enabled or 0),
+            }
+            for row in rows
+        ]
+
+
+def migrate_memories(
+    tenant_code: str,
+    *,
+    source_user_key: str,
+    target_user_key: str,
+    source_app_uuid: str = "",
+    target_app_uuid: str = "",
+    delete_source: bool = False,
+) -> dict[str, int]:
+    """把源用户的记忆批量复制到目标用户/应用；可选迁移（成功后删除源）。"""
+    source = normalize_user_key(source_user_key)
+    target = normalize_user_key(target_user_key)
+    if not source or not target:
+        raise ValueError("源/目标 user_key 不能为空")
+    if delete_source and source == target and (not target_app_uuid or target_app_uuid == source_app_uuid):
+        raise ValueError("源和目标相同，不能删除源")
+    items = export_memories(
+        tenant_code, user_key=source, app_uuid=source_app_uuid
+    )
+    upserted = 0
+    for item in items:
+        target_app = target_app_uuid or str(item.get("app_uuid") or "")
+        expires_at = str(item.get("expires_at") or "")
+        upsert_memory(
+            tenant_code=tenant_code,
+            app_uuid=target_app,
+            user_key=target,
+            user_name=str(item.get("user_name") or target),
+            kind=str(item.get("kind") or "fact"),
+            content=str(item.get("content") or ""),
+            importance=float(item.get("importance") or 0),
+            embedding=list(item.get("embedding") or []),
+            embedding_model=str(item.get("embedding_model") or ""),
+            source_conversation_id=str(item.get("source_conversation_id") or ""),
+            source_message_id=str(item.get("source_message_id") or ""),
+            expires_at=(
+                datetime.fromisoformat(expires_at.replace("Z", "+00:00")).replace(tzinfo=None)
+                if expires_at
+                else None
+            ),
+        )
+        upserted += 1
+    deleted = 0
+    if delete_source:
+        for item in items:
+            if delete_memory(str(item.get("uuid") or ""), tenant_code):
+                deleted += 1
+    return {"exported": len(items), "upserted": upserted, "deleted": deleted}
+
+
 def get_memory(memory_uuid: str, tenant_code: str = "") -> UserMemory | None:
     with session_scope() as session:
         row = session.scalar(

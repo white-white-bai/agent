@@ -321,8 +321,8 @@
 - [x] 测试：新增 `test_user_memory.py`、`test_hitl.py`、`test_checkpoint_wiring.py`、`test_subgraph.py`；扩展 `test_checkpoint.py`；前端补 run/api/views/components/nodeMeta 用例
 - [x] 文档：`agent-platform/README.md`、`.env.example`、`agent-platform-ui/README.md`、`AGENTS.md`/`CLAUDE.md`
 - [x] P0 加固（2026-10-20）：HITL 恢复原子抢占、`/admin/runs/{thread_id}/cancel` 与前端取消、`resolved_by/resolved_at` 审计、`AP_HITL_RUN_TIMEOUT_SECONDS` 回收超时 `interrupted`；子图发布递归钉版本、HITL 运行写 `subgraph_snapshot` 并在详情/恢复时优先使用、`inputs/query/output_var` 在编译子图链路生效且不覆盖父图上下文；用户记忆近似去重、按当前 embedding 模型/维度过滤旧向量、`rebuild-embeddings` 接口与管理端按钮
-- [x] 2026-10-21 评测/沙箱/安全：`agentapp/eval.py` + `scripts/eval_agent_traces.py` 轨迹标准化、工具路径 Levenshtein 距离、禁用工具/答案/状态约束、可选 LLM judge 与 CI 门禁；`scripts/record_agent_trace.py` 批量录制真实 Agent 轨迹；代码节点新增 Docker 隔离沙箱（默认 inprocess，docker 模式断网/只读/非 root/资源限制/超时清理）；`core/prompt_guard.py` 对外部工具输出与图内 agent 工具观察做注入剥离与 `<untrusted_data>` 边界（默认关闭）；HITL Webhook 通知（含 resume endpoint，失败降级）；可选 Playwright 浏览器工具（默认关闭，URL 白名单/私网拦截、登录态持久化、下载、多标签、同 thread 复用、运行结束清理）；HITL 审批链接 HMAC token + `/webhooks/hitl/approve|reject` 回调（interrupt id 一次性校验 + `ap_hitl_action` 跨进程幂等）；用户记忆按用户跨应用汇总接口与页面
-- [ ] 未纳入：用户记忆跨应用聚合的导出/批量迁移
+- [x] 2026-10-21 评测/沙箱/安全：`agentapp/eval.py` + `scripts/eval_agent_traces.py` 轨迹标准化、工具路径 Levenshtein 距离、禁用工具/答案/状态约束、可选 LLM judge 与 CI 门禁；`scripts/export_agent_queries.py` 从真实会话导出 query、`scripts/record_agent_trace.py` 批量录制真实 Agent 轨迹；代码节点新增 Docker 隔离沙箱（默认 inprocess，docker 模式断网/只读/非 root/资源限制/超时清理）；`core/prompt_guard.py` 对外部工具输出与图内 agent 工具观察做注入剥离与 `<untrusted_data>` 边界（默认关闭）；HITL Webhook 通知（含 resume endpoint，失败降级）；可选 Playwright 浏览器工具（默认关闭，URL 白名单/私网拦截、登录态持久化、下载、多标签、同 thread 复用、运行结束清理）；HITL 审批链接 HMAC token + `/webhooks/hitl/approve|reject` 回调（interrupt id 一次性校验 + `ap_hitl_action` 跨进程幂等）；用户记忆按用户跨应用汇总、JSON 导出与批量迁移接口/页面
+- [ ] 未纳入：用户记忆跨租户迁移（当前迁移限定同租户）
 
 **M1～M4 决策清单**：无未交付项。
 
