@@ -421,6 +421,26 @@ class ToolAuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
+class AgentTraceLog(Base):
+    """Agent 应用运行轨迹：生产请求自动落库，供评测与审计。"""
+
+    __tablename__ = "ap_agent_trace"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    tenant_code: Mapped[str] = mapped_column(String(64), index=True, default="")
+    app_uuid: Mapped[str] = mapped_column(String(64), index=True, default="")
+    thread_id: Mapped[str] = mapped_column(String(128), index=True, default="")
+    query: Mapped[str] = mapped_column(Text, default="")
+    tool_calls: Mapped[list] = mapped_column(JSON, default=list)
+    tool_events: Mapped[list] = mapped_column(JSON, default=list)
+    answer: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16), default="completed")
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    token_chars: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
 class HitlOutbox(Base):
     """HITL 外部通知 outbox：持久化待发送/重试中的 Webhook 事件。"""
 

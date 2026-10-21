@@ -65,6 +65,8 @@ class Settings(BaseSettings):
     agent_max_steps: int = 6
     # 智能体自主循环：单个工具结果回灌模型时的最大字符数
     agent_tool_result_max_chars: int = 4000
+    # 生产轨迹自动落库（默认关闭）
+    agent_trace_enabled: bool = False
 
     # 代码节点沙箱：inprocess（默认，受限 exec，兼容旧行为）/ docker（隔离容器，推荐生产）
     code_sandbox_mode: str = "inprocess"

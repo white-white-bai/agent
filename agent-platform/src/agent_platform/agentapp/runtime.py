@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -22,6 +23,7 @@ from agent_platform.core.config import get_settings
 from agent_platform.engine.context import EngineContext
 
 _INTERRUPT = "__interrupt__"
+logger = logging.getLogger(__name__)
 
 
 def _config(checkpointer: Any, thread_id: str | None) -> dict[str, Any]:
@@ -187,21 +189,43 @@ async def stream_agent(
     checkpointer: Any = None,
     thread_id: str | None = None,
     tenant_code: str = "",
+    app_uuid: str = "",
     depth: int = 0,
 ) -> AsyncIterator[dict[str, Any]]:
     """事件：token（最终答复增量）、agent_plan / agent_tool / agent_reflection / agent_interrupt（内部事件，对外被忽略）、
     最后一条 final（answer + state.variables.chunks）。"""
+    events: list[dict[str, Any]] = []
     try:
         graph, sink, config = await _prepare(agent_def, ctx, checkpointer, thread_id, tenant_code, depth)
         pending = await _pending_interrupt(graph, config)
         if pending is not None:
             # 该会话存在待审批中断：不静默续跑，回传待审批提示，由管理端显式 resume
             prompt = str(pending.get("prompt") or "上一轮工具调用待人工确认。")
-            yield {"type": "final", "answer": prompt, "state": {"variables": {"chunks": [], "answer": prompt, "paused": True}}}
+            final = {
+                "type": "final",
+                "answer": prompt,
+                "state": {"variables": {"chunks": [], "answer": prompt, "paused": True}},
+            }
+            events.append(final)
+            yield final
             return
         async for item in _drive(graph, _initial(agent_def, inputs), config, sink):
+            events.append(item)
             yield item
     finally:
+        if events and app_uuid and get_settings().agent_trace_enabled:
+            try:
+                from agent_platform.core.agent_trace import save_trace
+
+                save_trace(
+                    tenant_code=tenant_code,
+                    app_uuid=app_uuid,
+                    thread_id=thread_id or "",
+                    query=str(inputs.get("query") or ""),
+                    events=events,
+                )
+            except Exception:
+                logger.warning("Agent 轨迹落库失败", exc_info=True)
         await _close_session(thread_id or "")
 
 

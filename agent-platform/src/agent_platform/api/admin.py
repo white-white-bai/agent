@@ -57,6 +57,7 @@ from agent_platform.api.schemas import (
 )
 from agent_platform.api.uploads import read_document, read_upload
 from agent_platform.checkpoint.factory import build_checkpointer
+from agent_platform.core import agent_trace as agent_trace_store
 from agent_platform.core import audit as tool_audit
 from agent_platform.core import metrics
 from agent_platform.core.accounts import AdminPrincipal
@@ -328,6 +329,7 @@ async def run_agent_stream(
                 checkpointer=build_checkpointer(get_settings()),
                 thread_id=thread_id,
                 tenant_code=app_row.tenant_code,
+                app_uuid=app_uuid,
             ):
                 if item.get("type") == "agent_interrupt":
                     await notify_hitl(
@@ -947,6 +949,48 @@ def _parse_expires_at(raw: str) -> datetime | None:
         return datetime.fromisoformat(raw.strip().replace("Z", "+00:00")).replace(tzinfo=None)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="expires_at 不是合法 ISO 时间") from exc
+
+
+@router.get("/agent-traces", dependencies=[Depends(require_permission("agent:read"))])
+def list_agent_trace_logs(
+    tenant_code: str = "",
+    app_uuid: str = "",
+    status: str = "",
+    page: int = 1,
+    size: int = 20,
+    principal: AdminPrincipal = Depends(get_current_admin),
+) -> dict[str, Any]:
+    rows, total = agent_trace_store.list_traces(
+        _tenant(principal, tenant_code),
+        app_uuid=app_uuid,
+        status=status,
+        page=page,
+        size=size,
+    )
+    return {
+        "data": {
+            "items": [
+                {
+                    "uuid": row.uuid,
+                    "tenant_code": row.tenant_code,
+                    "app_uuid": row.app_uuid,
+                    "thread_id": row.thread_id,
+                    "query": row.query,
+                    "tool_calls": row.tool_calls or [],
+                    "tool_events": row.tool_events or [],
+                    "answer": row.answer,
+                    "status": row.status,
+                    "duration_ms": int(row.duration_ms or 0),
+                    "token_chars": int(row.token_chars or 0),
+                    "created_at": _iso(row.created_at),
+                }
+                for row in rows
+            ],
+            "total": total,
+            "page": page,
+            "size": size,
+        }
+    }
 
 
 @router.get("/tool-audits", dependencies=[Depends(require_permission("tool:read"))])

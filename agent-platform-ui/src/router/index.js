@@ -70,6 +70,12 @@ export const MENU_PAGES = [
     meta: { title: '审批审计', icon: 'CircleCheck', permission: 'graph:read' },
   },
   {
+    path: '/agent-traces',
+    name: 'agent-traces',
+    component: () => import('@/views/AgentTracesView.vue'),
+    meta: { title: 'Agent 轨迹', icon: 'DataLine', permission: 'agent:read' },
+  },
+  {
     path: '/guards',
     name: 'guards',
     component: () => import('@/views/GuardsView.vue'),

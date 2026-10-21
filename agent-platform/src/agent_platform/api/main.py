@@ -221,6 +221,7 @@ async def _chat_stream(
                     checkpointer=build_checkpointer(settings),
                     thread_id=conversation.conversation_id,
                     tenant_code=app_record.tenant_code,
+                    app_uuid=app_record.uuid,
                 )
             else:
                 stream = stream_graph(graph_def, inputs, ctx, **stream_kwargs)
