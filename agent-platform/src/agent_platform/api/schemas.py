@@ -324,6 +324,14 @@ class UserMemoryMigrateRequest(BaseModel):
     delete_source: bool = False
 
 
+class UserMemoryImportRequest(BaseModel):
+    tenant_code: str = ""
+    target_tenant_code: str = ""
+    target_user_key: str = ""
+    target_app_uuid: str = ""
+    items: list[dict[str, Any]] = Field(default_factory=list)
+
+
 # --------------------------------------------------------------------------- 管理端账号
 
 class LoginRequest(BaseModel):

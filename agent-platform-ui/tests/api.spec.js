@@ -70,6 +70,7 @@ describe('api endpoint map', () => {
     ['aggregateUserMemories', () => api.aggregateUserMemories({ user_key: 'u' }), '/admin/user-memories/aggregate', { params: { user_key: 'u' } }],
     ['exportUserMemories', () => api.exportUserMemories({ user_key: 'u' }), '/admin/user-memories/export', { params: { user_key: 'u' } }],
     ['migrateUserMemories', () => api.migrateUserMemories({ target_user_key: 'u2' }), '/admin/user-memories/migrate', { method: 'POST', body: { target_user_key: 'u2' } }],
+    ['importUserMemories', () => api.importUserMemories({ items: [] }), '/admin/user-memories/import', { method: 'POST', body: { items: [] } }],
     ['listMemoryUsers', () => api.listMemoryUsers({ tenant_code: 't' }), '/admin/user-memories/users', { params: { tenant_code: 't' } }],
     ['createUserMemory', () => api.createUserMemory({ content: 'c' }), '/admin/user-memories', { method: 'POST', body: { content: 'c' } }],
     ['updateUserMemory', () => api.updateUserMemory('m1', { content: 'c' }), '/admin/user-memories/m1', { method: 'PUT', body: { content: 'c' } }],

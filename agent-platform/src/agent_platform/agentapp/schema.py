@@ -21,10 +21,11 @@ class AgentToolRef(BaseModel):
 
 
 class AgentMemoryConfig(BaseModel):
-    """长期记忆：消息由 checkpointer 跨轮持久；window 控制送模型的裁剪条数。"""
+    """长期记忆：消息由 checkpointer 跨轮持久；window/max_chars 控制送模型的裁剪。"""
 
     window: int = 10
-    summary_enabled: bool = False
+    max_chars: int = 0
+    summary_enabled: bool | None = None
     provider: str = ""
 
 

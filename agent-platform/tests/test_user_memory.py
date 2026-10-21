@@ -146,6 +146,30 @@ def test_aggregate_user_memories_by_app(api_client):
     assert {(item["app_uuid"], item["count"]) for item in data["apps"]} == {("a1", 1), ("a2", 1)}
 
 
+def test_import_exported_memories(api_client):
+    settings = _settings()
+    store.create_memory(
+        tenant_code="t", app_uuid="a1", user_key="u1", kind="fact", content="导出内容", settings=settings
+    )
+    exported = api_client.get(
+        "/admin/user-memories/export", params={"tenant_code": "t", "user_key": "u1"}
+    ).json()["data"]
+
+    response = api_client.post(
+        "/admin/user-memories/import",
+        json={
+            "tenant_code": "t",
+            "target_user_key": "u-imported",
+            "target_app_uuid": "b1",
+            "items": exported["items"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"imported": 1, "skipped": 0, "total": 1}
+    assert store.list_memories("t", user_key="u-imported", app_uuid="b1")[1] == 1
+
+
 def test_export_and_migrate_user_memories(api_client):
     settings = _settings()
     store.create_memory(

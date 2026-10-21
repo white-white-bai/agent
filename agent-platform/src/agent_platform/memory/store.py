@@ -228,6 +228,56 @@ def migrate_memories(
     return {"exported": len(items), "upserted": upserted, "deleted": deleted}
 
 
+def import_memories(
+    tenant_code: str,
+    items: list[dict[str, Any]],
+    *,
+    target_tenant_code: str = "",
+    target_user_key: str = "",
+    target_app_uuid: str = "",
+) -> dict[str, int]:
+    """从导出 JSON 的 items 批量导入；目标用户/应用/租户可统一覆盖。"""
+    target_tenant = target_tenant_code or tenant_code
+    imported = 0
+    skipped = 0
+    for item in items or []:
+        if not isinstance(item, dict):
+            skipped += 1
+            continue
+        user_key = target_user_key or str(item.get("user_key") or "")
+        app_uuid = target_app_uuid or str(item.get("app_uuid") or "")
+        content = str(item.get("content") or "")
+        if not user_key.strip() or not content.strip():
+            skipped += 1
+            continue
+        expires_at = str(item.get("expires_at") or "")
+        try:
+            parsed_expires = (
+                datetime.fromisoformat(expires_at.replace("Z", "+00:00")).replace(tzinfo=None)
+                if expires_at
+                else None
+            )
+            upsert_memory(
+                tenant_code=target_tenant,
+                app_uuid=app_uuid,
+                user_key=user_key,
+                user_name=str(item.get("user_name") or user_key),
+                kind=str(item.get("kind") or "fact"),
+                content=content,
+                importance=float(item.get("importance") or 0),
+                embedding=list(item.get("embedding") or []),
+                embedding_model=str(item.get("embedding_model") or ""),
+                source_conversation_id=str(item.get("source_conversation_id") or ""),
+                source_message_id=str(item.get("source_message_id") or ""),
+                expires_at=parsed_expires,
+            )
+        except ValueError:
+            skipped += 1
+            continue
+        imported += 1
+    return {"imported": imported, "skipped": skipped, "total": len(items or [])}
+
+
 def get_memory(memory_uuid: str, tenant_code: str = "") -> UserMemory | None:
     with session_scope() as session:
         row = session.scalar(

@@ -49,6 +49,7 @@ from agent_platform.api.schemas import (
     SensitiveWordCreateRequest,
     ToolTestRequest,
     ToolUpsertRequest,
+    UserMemoryImportRequest,
     UserMemoryMigrateRequest,
     UserMemoryPurgeRequest,
     UserMemoryRecallRequest,
@@ -1022,6 +1023,20 @@ def migrate_user_memories(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"data": result}
+
+
+@router.post("/user-memories/import", dependencies=[Depends(require_permission("memory:write"))])
+def import_user_memories(
+    request: UserMemoryImportRequest, principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
+    result = memory_store.import_memories(
+        _tenant(principal, request.tenant_code),
+        request.items,
+        target_tenant_code=_tenant(principal, request.target_tenant_code or request.tenant_code),
+        target_user_key=request.target_user_key,
+        target_app_uuid=request.target_app_uuid,
+    )
     return {"data": result}
 
 

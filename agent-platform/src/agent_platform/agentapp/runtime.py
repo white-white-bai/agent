@@ -31,10 +31,15 @@ def _config(checkpointer: Any, thread_id: str | None) -> dict[str, Any]:
 
 def _initial(agent_def: AgentAppDef, inputs: dict[str, Any]) -> dict[str, Any]:
     query = str(inputs.get("query") or "")
+    summary = (
+        ""
+        if agent_def.memory.summary_enabled is False
+        else str(inputs.get("summary") or "")
+    )
     return {
         "messages": [HumanMessage(query)],
         "query": query,
-        "summary": str(inputs.get("summary") or ""),
+        "summary": summary,
         "plan": "",
         "reflections": [],
         "iterations": 0,

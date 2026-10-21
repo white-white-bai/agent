@@ -60,14 +60,26 @@ def _last_answer_text(state: dict[str, Any]) -> str:
     return ""
 
 
-def _trim(messages: list[AnyMessage], window: int) -> list[AnyMessage]:
+def _trim(messages: list[AnyMessage], window: int, max_chars: int = 0) -> list[AnyMessage]:
     """按窗口裁剪，且不以孤立 ToolMessage 开头（保持 tool_call 配对）。"""
     if window <= 0 or len(messages) <= window:
-        return messages
-    index = len(messages) - window
-    while index > 0 and isinstance(messages[index], ToolMessage):
-        index -= 1
-    return messages[index:]
+        result = messages
+    else:
+        index = len(messages) - window
+        while index > 0 and isinstance(messages[index], ToolMessage):
+            index -= 1
+        result = messages[index:]
+    if max_chars <= 0:
+        return result
+    trimmed = list(result)
+    total = sum(len(_content_text(message)) for message in trimmed)
+    while len(trimmed) > 1 and total > max_chars:
+        removed = trimmed.pop(0)
+        total -= len(_content_text(removed))
+        while trimmed and isinstance(trimmed[0], ToolMessage):
+            removed = trimmed.pop(0)
+            total -= len(_content_text(removed))
+    return trimmed
 
 
 def _model_input(state: dict[str, Any], agent_def: AgentAppDef) -> list[AnyMessage]:
@@ -78,7 +90,11 @@ def _model_input(state: dict[str, Any], agent_def: AgentAppDef) -> list[AnyMessa
         prefix.append(SystemMessage(f"历史对话摘要：\n{state['summary']}"))
     if state.get("plan"):
         prefix.append(SystemMessage(f"执行计划：\n{state['plan']}"))
-    return prefix + _trim(list(state.get("messages", [])), agent_def.memory.window)
+    return prefix + _trim(
+        list(state.get("messages", [])),
+        agent_def.memory.window,
+        agent_def.memory.max_chars,
+    )
 
 
 def _hitl_covers(agent_def: AgentAppDef, name: str) -> bool:

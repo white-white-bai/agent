@@ -60,6 +60,37 @@ async def test_notify_hitl_posts_event_and_secret(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_notify_hitl_retries_transient_failure(monkeypatch):
+    class FlakyClient:
+        calls = 0
+
+        def __init__(self, timeout):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, *args, **kwargs):
+            FlakyClient.calls += 1
+            if FlakyClient.calls == 1:
+                raise RuntimeError("temporary")
+            return _Response()
+
+    monkeypatch.setattr(notifications.httpx, "AsyncClient", FlakyClient)
+    settings = SimpleNamespace(
+        hitl_webhook_url="https://hooks.example/hitl",
+        hitl_webhook_attempts=2,
+        hitl_webhook_backoff_seconds=0,
+    )
+
+    assert await notifications.notify_hitl("agent.interrupt", {"thread_id": "t1"}, settings) is True
+    assert FlakyClient.calls == 2
+
+
+@pytest.mark.asyncio
 async def test_notify_hitl_failure_is_swallowed(monkeypatch):
     class BrokenClient:
         def __init__(self, timeout):
@@ -75,6 +106,9 @@ async def test_notify_hitl_failure_is_swallowed(monkeypatch):
             raise RuntimeError("network down")
 
     monkeypatch.setattr(notifications.httpx, "AsyncClient", BrokenClient)
-    settings = SimpleNamespace(hitl_webhook_url="https://hooks.example/hitl")
+    settings = SimpleNamespace(
+        hitl_webhook_url="https://hooks.example/hitl",
+        hitl_webhook_attempts=1,
+    )
 
     assert await notifications.notify_hitl("graph.interrupt", {"thread_id": "t1"}, settings) is False

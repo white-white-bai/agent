@@ -208,11 +208,11 @@ start → 意图识别 → 知识检索 → 内容生成 → 合规质检 → �
 - **定义**：`agentapp/schema.py::AgentAppDef`；存 `ap_agent_app` / `ap_agent_app_version`（草稿 + 发布版本，与图应用同构）。
 - **运行时**：`[规划?] → agent ⟲ 工具 → [反思] → 收尾`。`agent` 节点绑定工具（`bind_tools`）由模型自行决定调用；`plan` / `reflect` 为配置开关。
 - **工具**：`ap_tool` 声明按 name 引用，`params`（`{name,type,required,enum,description}`）转成 function-calling 的 JSON Schema；执行统一走 `call_declared_tool`（复用参数校验 / 重试 / 兜底）。知识库可暴露为 `knowledge_search` 工具；`sub_agents` 把子智能体暴露为 `delegate_<code>` 工具（`AP_AGENT_APP_DEPTH` 限制递归深度），返回结构化 `AgentHandoff` JSON（`from_agent` / `to_agent` / `status` / `answer` / `detail`）；`mcp_servers` 会调 `tools/list` **动态发现** MCP 工具（`inputSchema` 自动转参模型，发现失败降级不阻断）。
-- **记忆**：自研 `MySQLCheckpointSaver` 按 `thread_id = conversation_id` **跨轮持久** agent 消息；`memory.window` 控制送模型的裁剪条数，`summary`（沿用 `AP_HISTORY_SUMMARY_*`）作为长窗口压缩注入。
+- **记忆**：自研 `MySQLCheckpointSaver` 按 `thread_id = conversation_id` **跨轮持久** agent 消息；`memory.window` 控制送模型的裁剪条数，`memory.max_chars` 是上下文字符预算（0 不限），`memory.summary_enabled` 可显式关闭全局历史摘要注入。
 - **Human-in-the-loop**：`hitl.policy` = `off`（默认）/ `before_all_tools` / `before_listed`。命中策略的工具调用前 `interrupt` 暂停本轮，对外 SSE 仍以**正常的 `message_end`**返回审批提示（不引入未知事件，兼容链路安全）；管理端 `POST /admin/apps/{uuid}/agent/resume` 以 `Command(resume=...)` 批准/拒绝续跑。会话存在待审批中断时，新一轮不静默续跑。
-- **外部审批通知**：配置 `AP_HITL_WEBHOOK_URL` 后，图运行与 Agent 应用中断时向 Webhook POST `{event, payload}`（含 `thread_id` / `app_uuid` / `resume_endpoint` / 中断载荷）；`AP_HITL_WEBHOOK_SECRET` 作为 `X-Webhook-Secret` 发送。通知失败只记日志，不阻断审批和 SSE。
-- **不可信内容隔离**：开启 `AP_PROMPT_GUARD_ENABLED=true` 后，声明式工具、MCP 动态工具、知识检索、子 Agent 返回文本，以及图内 agent 模式的工具观察，都会先剥离常见指令注入，再用 `<untrusted_data>` 边界包裹后送入模型；`AP_PROMPT_GUARD_MAX_CHARS` 控制截断长度。默认关闭，避免改变既有输出。
-- **浏览器操作（可选）**：Agent 定义里 `browser=true` 且 `AP_BROWSER_ENABLED=true` 时，装配 `browser_open` / `browser_click` / `browser_fill` / `browser_press` / `browser_text` / `browser_screenshot` / `browser_download` 工具。需要先 `pip install -e ".[browser]"` 并 `playwright install chromium`；同一 `thread_id` 复用页面，运行结束自动关闭。`AP_BROWSER_STORAGE_STATE` 可持久化登录态（cookie/localStorage，注意文件权限），`AP_BROWSER_DOWNLOAD_DIR` 指定下载目录。URL 只允许 http/https，默认拦截 localhost/私网/链路本地 IP；生产建议配置 `AP_BROWSER_ALLOWED_HOSTS` 白名单，必要时才开 `AP_BROWSER_ALLOW_PRIVATE`。
+- **外部审批通知**：配置 `AP_HITL_WEBHOOK_URL` 后，图运行与 Agent 应用中断时向 Webhook POST `{event, payload}`（含 `thread_id` / `app_uuid` / `resume_endpoint` / 中断载荷）；`AP_HITL_WEBHOOK_SECRET` 作为 `X-Webhook-Secret` 发送。通知失败按 `AP_HITL_WEBHOOK_ATTEMPTS` 重试，最终失败只记日志，不阻断审批和 SSE。
+- **不可信内容隔离**：开启 `AP_PROMPT_GUARD_ENABLED=true` 后，声明式工具、MCP 动态工具、知识检索、子 Agent 返回文本，以及图内 agent 模式的工具观察，都会先脱敏邮箱/手机号/API key、剥离常见指令注入，再用 `<untrusted_data>` 边界包裹后送入模型；`AP_PROMPT_GUARD_MAX_CHARS` 控制截断长度。默认关闭，避免改变既有输出。
+- **浏览器操作（可选）**：Agent 定义里 `browser=true` 且 `AP_BROWSER_ENABLED=true` 时，装配 `browser_open` / `browser_click` / `browser_fill` / `browser_press` / `browser_text` / `browser_screenshot` / `browser_download` / `browser_upload` / `browser_new_tab` / `browser_tabs` / `browser_switch_tab` / `browser_close_tab` 工具。需要先 `pip install -e ".[browser]"` 并 `playwright install chromium`；同一 `thread_id` 复用页面，运行结束自动关闭。`AP_BROWSER_STORAGE_STATE` 可持久化登录态（cookie/localStorage，注意文件权限），`AP_BROWSER_DOWNLOAD_DIR` / `AP_BROWSER_UPLOAD_DIR` 分别限制下载与可上传目录。URL 只允许 http/https，默认拦截 localhost/私网/链路本地 IP；生产建议配置 `AP_BROWSER_ALLOWED_HOSTS` 白名单，必要时才开 `AP_BROWSER_ALLOW_PRIVATE`。
 - **入口**：`/v1/chat-messages`（含 transfer 链路）按 `app_type` 分叉到 `stream_agent`，产出与图一致的 `token` / `final` 事件；`runWorkflow` / `/v1/workflows/run` 同步分叉。
 
 **管理端接口**（权限点 `agent:read` / `agent:write`）
@@ -436,10 +436,10 @@ python -m agent_platform.worker.main
   命中写入 `inputs.user_memory`（结构化）与 `inputs.user_memory_text`（文本）；autonomous 模式自动把后者注入 system 消息，
   其它模式可在提示词里写 `{{ user_memory_text }}`。
 - 管理端：`GET /admin/user-memories`、`GET /admin/user-memories/users`、`GET /admin/user-memories/aggregate`、
-  `GET /admin/user-memories/export`、`POST /admin/user-memories/migrate`、
+  `GET /admin/user-memories/export`、`POST /admin/user-memories/import`、`POST /admin/user-memories/migrate`、
   `POST|PUT|DELETE /admin/user-memories*`、`POST /admin/user-memories/recall`、`POST /admin/user-memories/purge`、
   `POST /admin/user-memories/rebuild-embeddings`、`GET /admin/memory/config`；
-  前端「用户记忆」页支持筛选、增删改、召回测试、按用户物理清除、按当前模型重建向量、按用户跨应用汇总，以及 JSON 导出/批量迁移。
+  前端「用户记忆」页支持筛选、增删改、召回测试、按用户物理清除、按当前模型重建向量、按用户跨应用汇总，以及 JSON 导出/导入/批量迁移。
 - 迁移：`POST /admin/user-memories/migrate` 默认同租户；全局管理员（未绑定租户）可传 `target_tenant_code` 做跨租户复制/迁移。
 - 隐私：`request.user` 目前是客户端自报，生产必须由网关注入可信 user 并开启管理端鉴权；`purge` 会物理删除
   记忆与水位线；召回按当前 `AP_EMBEDDING_MODEL` / `AP_EMBEDDING_DIM` 过滤失效向量，修改模型或维度后

@@ -56,7 +56,8 @@ const form = reactive({
   retriever: 'builtin',
   top_k: 5,
   memory_window: 10,
-  summary_enabled: false,
+  memory_max_chars: 0,
+  summary_enabled: 'follow',
   planning: false,
   reflection_rounds: 0,
   max_steps: 6,
@@ -87,7 +88,11 @@ function buildDefinition() {
     browser_allowed_hosts: form.browser_allowed_hosts,
     browser_allow_private: form.browser_allow_private,
     browser_storage_state: form.browser_storage_state,
-    memory: { window: form.memory_window, summary_enabled: form.summary_enabled },
+    memory: {
+      window: form.memory_window,
+      max_chars: form.memory_max_chars,
+      summary_enabled: form.summary_enabled === 'follow' ? null : form.summary_enabled === 'on',
+    },
     planning: form.planning,
     reflection_rounds: form.reflection_rounds,
     max_steps: form.max_steps,
@@ -119,7 +124,8 @@ function applyDefinition(definition) {
     retriever: knowledge.retriever || 'builtin',
     top_k: knowledge.top_k ?? 5,
     memory_window: memory.window ?? 10,
-    summary_enabled: Boolean(memory.summary_enabled),
+    memory_max_chars: memory.max_chars ?? 0,
+    summary_enabled: memory.summary_enabled == null ? 'follow' : memory.summary_enabled ? 'on' : 'off',
     planning: Boolean(def.planning),
     reflection_rounds: def.reflection_rounds ?? 0,
     max_steps: def.max_steps ?? 6,
@@ -375,6 +381,16 @@ onMounted(async () => {
           </el-form-item>
           <el-form-item label="记忆窗口（条）">
             <el-input-number v-model="form.memory_window" :min="0" controls-position="right" />
+          </el-form-item>
+          <el-form-item label="上下文最大字符（0 不限）">
+            <el-input-number v-model="form.memory_max_chars" :min="0" controls-position="right" />
+          </el-form-item>
+          <el-form-item label="历史摘要">
+            <el-select v-model="form.summary_enabled" placeholder="跟随全局" style="width: 100%">
+              <el-option label="跟随全局" value="follow" />
+              <el-option label="启用" value="on" />
+              <el-option label="关闭" value="off" />
+            </el-select>
           </el-form-item>
           <el-form-item label="人工审批（HITL）">
             <el-switch v-model="form.hitl_enabled" />

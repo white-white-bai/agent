@@ -73,6 +73,7 @@ async def test_browser_tools_only_assembled_when_enabled():
         "browser_fill",
         "browser_text",
         "browser_download",
+        "browser_upload",
         "browser_new_tab",
         "browser_tabs",
         "browser_switch_tab",
@@ -91,6 +92,9 @@ class _FakeLocator:
 
     async def click(self) -> None:
         return None
+
+    async def set_input_files(self, path: str) -> None:
+        self.uploaded = path
 
     @property
     def first(self) -> _FakeLocator:
@@ -178,6 +182,24 @@ async def test_browser_download_saves_file(tmp_path):
 
     assert path.endswith("result.csv")
     assert Path(path).read_text(encoding="utf-8").startswith("a,b")
+
+
+@pytest.mark.asyncio
+async def test_browser_upload_requires_allowed_directory(tmp_path):
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    file_path = allowed / "a.txt"
+    file_path.write_text("hello", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("no", encoding="utf-8")
+    session = browser.BrowserSession(
+        SimpleNamespace(browser_upload_dir=str(allowed), browser_max_chars=100)
+    )
+    session._page = _FakePage()
+
+    await session.upload("#file", str(file_path))
+    with pytest.raises(browser.BrowserError, match="AP_BROWSER_UPLOAD_DIR"):
+        await session.upload("#file", str(outside))
 
 
 @pytest.mark.asyncio

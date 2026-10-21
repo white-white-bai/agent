@@ -184,6 +184,20 @@ class BrowserSession:
         await download.save_as(str(path))
         return str(path)
 
+    async def upload(self, selector: str, file_path: str) -> str:
+        upload_root = str(getattr(self.settings, "browser_upload_dir", "") or "")
+        if not upload_root:
+            raise BrowserError("browser_upload 未配置 AP_BROWSER_UPLOAD_DIR")
+        root = Path(upload_root).resolve()
+        target = Path(file_path).resolve()
+        if target != root and root not in target.parents:
+            raise BrowserError("上传文件必须位于 AP_BROWSER_UPLOAD_DIR 内")
+        if not target.is_file():
+            raise BrowserError(f"上传文件不存在：{file_path}")
+        page = await self.page()
+        await page.locator(selector).first.set_input_files(str(target))
+        return await self.snapshot()
+
     async def new_tab(self, url: str = "") -> str:
         context = self._context
         if context is None:
@@ -286,6 +300,10 @@ def build_browser_tools(
         session = await get_session(thread_id, settings)
         return _wrap(await session.download(selector), "browser_download")
 
+    async def _upload(selector: str, file_path: str) -> Any:
+        session = await get_session(thread_id, settings)
+        return _wrap(await session.upload(selector, file_path), "browser_upload")
+
     async def _new_tab(url: str = "") -> Any:
         session = await get_session(thread_id, settings)
         return _wrap(await session.new_tab(url), "browser_new_tab")
@@ -351,6 +369,16 @@ def build_browser_tools(
             description="点击 selector 触发下载并返回保存路径（适合 CSV 等附件）。",
             args_schema=create_model(
                 "browser_download_args", selector=(str, Field(..., description="触发下载的 CSS selector"))
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=_upload,
+            name="browser_upload",
+            description="向文件输入框上传 AP_BROWSER_UPLOAD_DIR 内的文件。",
+            args_schema=create_model(
+                "browser_upload_args",
+                selector=(str, Field(..., description="file input 的 CSS selector")),
+                file_path=(str, Field(..., description="上传目录内的文件路径")),
             ),
         ),
         StructuredTool.from_function(

@@ -8,6 +8,7 @@ import {
   deleteUserMemory,
   exportUserMemories,
   getMemoryConfig,
+  importUserMemories,
   listMemoryUsers,
   listUserMemories,
   migrateUserMemories,
@@ -53,6 +54,7 @@ const aggregateTotal = ref(0)
 
 const migrateVisible = ref(false)
 const migrating = ref(false)
+const importInput = ref(null)
 const migrateForm = reactive({
   source_user_key: '',
   source_app_uuid: '',
@@ -219,6 +221,30 @@ async function exportMemories() {
   }
 }
 
+function triggerImport() {
+  importInput.value && importInput.value.click()
+}
+
+async function importFile(event) {
+  const file = event.target.files && event.target.files[0]
+  if (!file) return
+  try {
+    const payload = JSON.parse(await file.text())
+    const result = await importUserMemories({
+      tenant_code: filters.tenant_code,
+      target_user_key: filters.user_key,
+      target_app_uuid: '',
+      items: payload.items || payload,
+    })
+    ElMessage.success(`已导入 ${result.imported || 0} 条，跳过 ${result.skipped || 0} 条`)
+    await reload()
+  } catch (error) {
+    ElMessage.error(error.message || '导入失败')
+  } finally {
+    event.target.value = ''
+  }
+}
+
 function openMigrate() {
   migrateForm.source_user_key = filters.user_key
   migrateForm.source_app_uuid = ''
@@ -301,7 +327,9 @@ onMounted(loadMeta)
       <el-button @click="refresh">查询</el-button>
       <el-button @click="openAggregate">跨应用汇总</el-button>
       <el-button @click="exportMemories">导出</el-button>
+      <el-button @click="triggerImport">导入</el-button>
       <el-button @click="openMigrate">批量迁移</el-button>
+      <input ref="importInput" type="file" accept="application/json" class="memory__file" @change="importFile" />
       <el-button v-if="auth.can('memory:write')" type="primary" @click="openCreate">新增记忆</el-button>
       <el-button v-if="auth.can('memory:write')" type="danger" plain @click="purge">按用户清除</el-button>
       <el-button v-if="auth.can('memory:write')" @click="rebuildEmbeddings">重建向量</el-button>
@@ -453,5 +481,9 @@ onMounted(loadMeta)
 
 .toolbar__input {
   width: 180px;
+}
+
+.memory__file {
+  display: none;
 }
 </style>

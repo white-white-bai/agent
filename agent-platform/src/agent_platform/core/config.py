@@ -83,6 +83,8 @@ class Settings(BaseSettings):
     hitl_webhook_url: str = ""
     hitl_webhook_secret: str = ""
     hitl_webhook_timeout_seconds: float = 3.0
+    hitl_webhook_attempts: int = 2
+    hitl_webhook_backoff_seconds: float = 0.2
     hitl_callback_base_url: str = ""
     hitl_action_ttl_seconds: int = 86400
 
@@ -95,6 +97,7 @@ class Settings(BaseSettings):
     browser_allow_private: bool = False
     browser_screenshot_dir: str = ".run/browser"
     browser_download_dir: str = ".run/downloads"
+    browser_upload_dir: str = ""
     browser_storage_state: str = ""
 
     # MCP 工具运行时发现：默认关闭，关闭时只用 ap_tool 声明

@@ -119,6 +119,7 @@ export const listUserMemories = (params) => request('/admin/user-memories', { pa
 export const aggregateUserMemories = (params) => request('/admin/user-memories/aggregate', { params })
 export const exportUserMemories = (params) => request('/admin/user-memories/export', { params })
 export const migrateUserMemories = (body) => request('/admin/user-memories/migrate', { method: 'POST', body })
+export const importUserMemories = (body) => request('/admin/user-memories/import', { method: 'POST', body })
 export const listMemoryUsers = (params) => request('/admin/user-memories/users', { params })
 export const createUserMemory = (body) => request('/admin/user-memories', { method: 'POST', body })
 export const updateUserMemory = (uuid, body) => request(`/admin/user-memories/${uuid}`, { method: 'PUT', body })
