@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 from sqlalchemy import select
 
+from agent_platform.core.audit import audit_tool_call
 from agent_platform.core.config import Settings
 from agent_platform.core.db import session_scope
 from agent_platform.domain.models import McpServer, Tool
@@ -142,7 +143,10 @@ async def call_declared_tool(
     tool_spec = _tool_spec(name, tenant_code)
     server_name = server or (tool_spec or {}).get("server") or ""
     call = functools.partial(_dispatch, settings, tool_spec or {}, server_name, {}, name, args, tenant_code)
-    return await call_tool_governed(name=name, args=args, call=call, **_policy(settings, tool_spec, params))
+    async with audit_tool_call(
+        settings, tenant_code=tenant_code, tool_name=name, server=server_name, args=args
+    ):
+        return await call_tool_governed(name=name, args=args, call=call, **_policy(settings, tool_spec, params))
 
 
 def build_tool_invoker(settings: Settings, servers: dict[str, str] | None = None) -> ToolInvoker:
@@ -158,9 +162,16 @@ def build_tool_invoker(settings: Settings, servers: dict[str, str] | None = None
                 call = functools.partial(
                     _dispatch, settings, tool_spec or {}, server_name, legacy, ref.name, args, tenant_code
                 )
-                results.append(
-                    await call_tool_governed(name=ref.name, args=args, call=call, **_policy(settings, tool_spec))
-                )
+                async with audit_tool_call(
+                    settings,
+                    tenant_code=tenant_code,
+                    tool_name=ref.name,
+                    server=server_name,
+                    args=args,
+                ):
+                    results.append(
+                        await call_tool_governed(name=ref.name, args=args, call=call, **_policy(settings, tool_spec))
+                    )
             except Exception as exc:
                 if ref.on_error == "skip":
                     logger.warning("工具 %s 调用失败已跳过：%s", ref.name, exc)

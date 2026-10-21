@@ -255,7 +255,12 @@ async def _append_mcp_tools(
 
         async def _run(_name: str = name, **kwargs: Any) -> Any:
             args = {key: value for key, value in kwargs.items() if value is not None}
-            result = await client.call_tool(_name, args)
+            from agent_platform.core.audit import audit_tool_call
+
+            async with audit_tool_call(
+                settings, tenant_code=tenant_code, tool_name=_name, server=server_name, args=args
+            ):
+                result = await client.call_tool(_name, args)
             return _guard(settings, result, _name)
 
         tools.append(

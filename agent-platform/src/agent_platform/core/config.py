@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     tool_retry_attempts: int = 2
     tool_retry_backoff_seconds: float = 0.5
     tool_fallback_enabled: bool = False
+    tool_audit_enabled: bool = False
 
     # 智能体：ReAct 等模式的默认步数上限
     agent_max_steps: int = 6

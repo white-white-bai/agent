@@ -267,6 +267,7 @@ python scripts/record_agent_trace.py \
 1. **参数校验**：必填、类型（string/number/boolean/array/object）、`enum` 越界；失败直接抛出（不重试）。
 2. **异常重试**：只重试瞬时错误（超时 / 连接失败 / 5xx / 429），指数退避；默认 `AP_TOOL_RETRY_ATTEMPTS=2`。
 3. **错误兜底**：默认关闭；开启后按 `mode` 返回空值 / 固定值 / 提示话术。链条级策略由 `ToolRef.on_error`（`raise` 默认 / `skip`）控制。
+4. **调用审计**：`AP_TOOL_AUDIT_ENABLED=true` 时记录工具名/服务/参数/状态/错误/耗时到 `ap_tool_audit`；写入失败只记日志，不影响工具执行。管理端 `GET /admin/tool-audits` 可筛选查看。
 
 未在 `ap_tool` 声明的引用回退到旧的「服务 + `/tools/{name}`」行为，行为不变。`POST /admin/tools/{uuid}/test` 可用样例参数实调一次。
 

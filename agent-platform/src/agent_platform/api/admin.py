@@ -57,6 +57,7 @@ from agent_platform.api.schemas import (
 )
 from agent_platform.api.uploads import read_document, read_upload
 from agent_platform.checkpoint.factory import build_checkpointer
+from agent_platform.core import audit as tool_audit
 from agent_platform.core import metrics
 from agent_platform.core.accounts import AdminPrincipal
 from agent_platform.core.config import get_settings
@@ -946,6 +947,45 @@ def _parse_expires_at(raw: str) -> datetime | None:
         return datetime.fromisoformat(raw.strip().replace("Z", "+00:00")).replace(tzinfo=None)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="expires_at 不是合法 ISO 时间") from exc
+
+
+@router.get("/tool-audits", dependencies=[Depends(require_permission("tool:read"))])
+def list_tool_audit_logs(
+    tenant_code: str = "",
+    tool_name: str = "",
+    status: str = "",
+    page: int = 1,
+    size: int = 20,
+    principal: AdminPrincipal = Depends(get_current_admin),
+) -> dict[str, Any]:
+    rows, total = tool_audit.list_tool_audits(
+        _tenant(principal, tenant_code),
+        tool_name=tool_name,
+        status=status,
+        page=page,
+        size=size,
+    )
+    return {
+        "data": {
+            "items": [
+                {
+                    "uuid": row.uuid,
+                    "tenant_code": row.tenant_code,
+                    "tool_name": row.tool_name,
+                    "server": row.server,
+                    "args": row.args or {},
+                    "status": row.status,
+                    "error": row.error or "",
+                    "duration_ms": int(row.duration_ms or 0),
+                    "created_at": _iso(row.created_at),
+                }
+                for row in rows
+            ],
+            "total": total,
+            "page": page,
+            "size": size,
+        }
+    }
 
 
 @router.get("/user-memories", dependencies=[Depends(require_permission("memory:read"))])

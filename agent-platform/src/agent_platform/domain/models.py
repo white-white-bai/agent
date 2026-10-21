@@ -404,6 +404,23 @@ class Run(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
+class ToolAuditLog(Base):
+    """工具调用审计：参数、状态、错误与耗时；默认关闭写入。"""
+
+    __tablename__ = "ap_tool_audit"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    uuid: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    tenant_code: Mapped[str] = mapped_column(String(64), index=True, default="")
+    tool_name: Mapped[str] = mapped_column(String(128), index=True)
+    server: Mapped[str] = mapped_column(String(64), default="")
+    args: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(16), default="ok")
+    error: Mapped[str] = mapped_column(Text, default="")
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
 class HitlAction(Base):
     """外部审批回调幂等记录：同一 interrupt 只允许一个决策落库。"""
 
