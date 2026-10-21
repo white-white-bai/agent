@@ -321,8 +321,8 @@
 - [x] 测试：新增 `test_user_memory.py`、`test_hitl.py`、`test_checkpoint_wiring.py`、`test_subgraph.py`；扩展 `test_checkpoint.py`；前端补 run/api/views/components/nodeMeta 用例
 - [x] 文档：`agent-platform/README.md`、`.env.example`、`agent-platform-ui/README.md`、`AGENTS.md`/`CLAUDE.md`
 - [x] P0 加固（2026-10-20）：HITL 恢复原子抢占、`/admin/runs/{thread_id}/cancel` 与前端取消、`resolved_by/resolved_at` 审计、`AP_HITL_RUN_TIMEOUT_SECONDS` 回收超时 `interrupted`；子图发布递归钉版本、HITL 运行写 `subgraph_snapshot` 并在详情/恢复时优先使用、`inputs/query/output_var` 在编译子图链路生效且不覆盖父图上下文；用户记忆近似去重、按当前 embedding 模型/维度过滤旧向量、`rebuild-embeddings` 接口与管理端按钮
-- [x] 2026-10-21 评测/沙箱/安全：`agentapp/eval.py` + `scripts/eval_agent_traces.py` 轨迹标准化、工具路径 Levenshtein 距离、禁用工具/答案/状态约束、可选 LLM judge 与 CI 门禁；代码节点新增 Docker 隔离沙箱（默认 inprocess，docker 模式断网/只读/非 root/资源限制/超时清理）；`core/prompt_guard.py` 对外部工具输出做注入剥离与 `<untrusted_data>` 边界（默认关闭）；HITL Webhook 通知（含 resume endpoint，失败降级）
-- [ ] 未纳入：浏览器/电脑控制（Step 3，需要 Playwright/浏览器运行时）、Webhook 侧的审批回调签名校验与幂等重放、用户记忆跨应用聚合的独立 UI（当前用 `AP_USER_MEMORY_SCOPE` 配置）
+- [x] 2026-10-21 评测/沙箱/安全：`agentapp/eval.py` + `scripts/eval_agent_traces.py` 轨迹标准化、工具路径 Levenshtein 距离、禁用工具/答案/状态约束、可选 LLM judge 与 CI 门禁；代码节点新增 Docker 隔离沙箱（默认 inprocess，docker 模式断网/只读/非 root/资源限制/超时清理）；`core/prompt_guard.py` 对外部工具输出与图内 agent 工具观察做注入剥离与 `<untrusted_data>` 边界（默认关闭）；HITL Webhook 通知（含 resume endpoint，失败降级）；可选 Playwright 浏览器工具（默认关闭，URL 白名单/私网拦截、同 thread 复用、运行结束清理）
+- [ ] 未纳入：浏览器登录态/下载/多标签等高级操作、Webhook 侧审批回调的签名校验与幂等重放、用户记忆跨应用聚合的独立 UI（当前用 `AP_USER_MEMORY_SCOPE` 配置）
 
 **M1～M4 决策清单**：无未交付项。
 

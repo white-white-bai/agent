@@ -126,6 +126,12 @@ async def _prepare(agent_def: AgentAppDef, ctx: EngineContext, checkpointer: Any
     return graph, sink, _config(checkpointer, thread_id)
 
 
+async def _close_session(thread_id: str) -> None:
+    from agent_platform.tools.browser import close_browser
+
+    await close_browser(thread_id or "")
+
+
 async def stream_agent(
     agent_def: AgentAppDef,
     inputs: dict[str, Any],
@@ -138,15 +144,18 @@ async def stream_agent(
 ) -> AsyncIterator[dict[str, Any]]:
     """事件：token（最终答复增量）、agent_plan / agent_tool / agent_reflection / agent_interrupt（内部事件，对外被忽略）、
     最后一条 final（answer + state.variables.chunks）。"""
-    graph, sink, config = await _prepare(agent_def, ctx, checkpointer, thread_id, tenant_code, depth)
-    pending = await _pending_interrupt(graph, config)
-    if pending is not None:
-        # 该会话存在待审批中断：不静默续跑，回传待审批提示，由管理端显式 resume
-        prompt = str(pending.get("prompt") or "上一轮工具调用待人工确认。")
-        yield {"type": "final", "answer": prompt, "state": {"variables": {"chunks": [], "answer": prompt, "paused": True}}}
-        return
-    async for item in _drive(graph, _initial(agent_def, inputs), config, sink):
-        yield item
+    try:
+        graph, sink, config = await _prepare(agent_def, ctx, checkpointer, thread_id, tenant_code, depth)
+        pending = await _pending_interrupt(graph, config)
+        if pending is not None:
+            # 该会话存在待审批中断：不静默续跑，回传待审批提示，由管理端显式 resume
+            prompt = str(pending.get("prompt") or "上一轮工具调用待人工确认。")
+            yield {"type": "final", "answer": prompt, "state": {"variables": {"chunks": [], "answer": prompt, "paused": True}}}
+            return
+        async for item in _drive(graph, _initial(agent_def, inputs), config, sink):
+            yield item
+    finally:
+        await _close_session(thread_id or "")
 
 
 async def resume_agent(
@@ -162,9 +171,12 @@ async def resume_agent(
     """对处于中断暂停态的会话续跑（人工批准 / 拒绝）。"""
     from langgraph.types import Command
 
-    graph, sink, config = await _prepare(agent_def, ctx, checkpointer, thread_id, tenant_code, depth)
-    async for item in _drive(graph, Command(resume=resume_value), config, sink):
-        yield item
+    try:
+        graph, sink, config = await _prepare(agent_def, ctx, checkpointer, thread_id, tenant_code, depth)
+        async for item in _drive(graph, Command(resume=resume_value), config, sink):
+            yield item
+    finally:
+        await _close_session(thread_id)
 
 
 async def run_agent(
@@ -178,7 +190,10 @@ async def run_agent(
     depth: int = 0,
 ) -> dict[str, Any]:
     """非流式版本：返回 {answer, state:{variables:{chunks}}}。"""
-    graph, sink, config = await _prepare(agent_def, ctx, checkpointer, thread_id, tenant_code, depth)
-    state = await graph.ainvoke(_initial(agent_def, inputs), config=config)
-    answer = str(state.get("answer") or "")
-    return {"answer": answer, "state": {"variables": {"chunks": list(sink), "answer": answer}}}
+    try:
+        graph, sink, config = await _prepare(agent_def, ctx, checkpointer, thread_id, tenant_code, depth)
+        state = await graph.ainvoke(_initial(agent_def, inputs), config=config)
+        answer = str(state.get("answer") or "")
+        return {"answer": answer, "state": {"variables": {"chunks": list(sink), "answer": answer}}}
+    finally:
+        await _close_session(thread_id or "")

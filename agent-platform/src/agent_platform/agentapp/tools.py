@@ -247,6 +247,16 @@ async def build_agent_tools(
         tools.append(_knowledge_tool(agent_def, settings, ctx, tenant_code, sink))
     for code in agent_def.sub_agents:
         tools.append(_sub_agent_tool(code, agent_def, settings, ctx, tenant_code, thread_id, depth))
+    if getattr(agent_def, "browser", False):
+        from agent_platform.tools.browser import build_browser_tools
+
+        tools.extend(
+            build_browser_tools(
+                settings,
+                thread_id,
+                guard=lambda value, source: _guard(settings, value, source),
+            )
+        )
     for server_name in agent_def.mcp_servers:
         await _append_mcp_tools(server_name, settings, tenant_code, tools)
     return tools, sink

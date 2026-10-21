@@ -211,7 +211,8 @@ start → 意图识别 → 知识检索 → 内容生成 → 合规质检 → �
 - **记忆**：自研 `MySQLCheckpointSaver` 按 `thread_id = conversation_id` **跨轮持久** agent 消息；`memory.window` 控制送模型的裁剪条数，`summary`（沿用 `AP_HISTORY_SUMMARY_*`）作为长窗口压缩注入。
 - **Human-in-the-loop**：`hitl.policy` = `off`（默认）/ `before_all_tools` / `before_listed`。命中策略的工具调用前 `interrupt` 暂停本轮，对外 SSE 仍以**正常的 `message_end`**返回审批提示（不引入未知事件，兼容链路安全）；管理端 `POST /admin/apps/{uuid}/agent/resume` 以 `Command(resume=...)` 批准/拒绝续跑。会话存在待审批中断时，新一轮不静默续跑。
 - **外部审批通知**：配置 `AP_HITL_WEBHOOK_URL` 后，图运行与 Agent 应用中断时向 Webhook POST `{event, payload}`（含 `thread_id` / `app_uuid` / `resume_endpoint` / 中断载荷）；`AP_HITL_WEBHOOK_SECRET` 作为 `X-Webhook-Secret` 发送。通知失败只记日志，不阻断审批和 SSE。
-- **不可信内容隔离**：开启 `AP_PROMPT_GUARD_ENABLED=true` 后，声明式工具、MCP 动态工具、知识检索和子 Agent 的返回文本会先剥离常见指令注入，再用 `<untrusted_data>` 边界包裹后送入模型；`AP_PROMPT_GUARD_MAX_CHARS` 控制截断长度。默认关闭，避免改变既有输出。
+- **不可信内容隔离**：开启 `AP_PROMPT_GUARD_ENABLED=true` 后，声明式工具、MCP 动态工具、知识检索、子 Agent 返回文本，以及图内 agent 模式的工具观察，都会先剥离常见指令注入，再用 `<untrusted_data>` 边界包裹后送入模型；`AP_PROMPT_GUARD_MAX_CHARS` 控制截断长度。默认关闭，避免改变既有输出。
+- **浏览器操作（可选）**：Agent 定义里 `browser=true` 且 `AP_BROWSER_ENABLED=true` 时，装配 `browser_open` / `browser_click` / `browser_fill` / `browser_press` / `browser_text` / `browser_screenshot` 工具。需要先 `pip install -e ".[browser]"` 并 `playwright install chromium`；同一 `thread_id` 复用页面，运行结束自动关闭。URL 只允许 http/https，默认拦截 localhost/私网/链路本地 IP；生产建议配置 `AP_BROWSER_ALLOWED_HOSTS` 白名单，必要时才开 `AP_BROWSER_ALLOW_PRIVATE`。
 - **入口**：`/v1/chat-messages`（含 transfer 链路）按 `app_type` 分叉到 `stream_agent`，产出与图一致的 `token` / `final` 事件；`runWorkflow` / `/v1/workflows/run` 同步分叉。
 
 **管理端接口**（权限点 `agent:read` / `agent:write`）

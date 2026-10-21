@@ -35,6 +35,8 @@ def build_agent_invoker(settings: Settings, toolbox: Any | None = None):
             toolbox=toolbox,
             tool_result_max_chars=settings.agent_tool_result_max_chars,
             memory_var=settings.user_memory_inject_var,
+            prompt_guard_enabled=settings.prompt_guard_enabled,
+            prompt_guard_max_chars=settings.prompt_guard_max_chars,
         )
         result = await modes_mod.run_spec(spec, mc, bound, query, system)
         answer, reasoning = split_reasoning(str(result.get("answer") or ""))

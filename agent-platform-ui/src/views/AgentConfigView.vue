@@ -48,6 +48,7 @@ const form = reactive({
   tool_names: [],
   mcp_servers: [],
   knowledge_as_tool: true,
+  browser: false,
   dataset_ids: [],
   retriever: 'builtin',
   top_k: 5,
@@ -79,6 +80,7 @@ function buildDefinition() {
       output_var: 'chunks',
     },
     knowledge_as_tool: form.knowledge_as_tool,
+    browser: form.browser,
     memory: { window: form.memory_window, summary_enabled: form.summary_enabled },
     planning: form.planning,
     reflection_rounds: form.reflection_rounds,
@@ -103,6 +105,7 @@ function applyDefinition(definition) {
     tool_names: (def.tools || []).map((item) => item.name),
     mcp_servers: def.mcp_servers || [],
     knowledge_as_tool: def.knowledge_as_tool ?? true,
+    browser: Boolean(def.browser),
     dataset_ids: knowledge.dataset_ids || [],
     retriever: knowledge.retriever || 'builtin',
     top_k: knowledge.top_k ?? 5,
@@ -334,6 +337,9 @@ onMounted(async () => {
           </el-form-item>
           <el-form-item label="知识作为工具（agent 自主决定是否检索）">
             <el-switch v-model="form.knowledge_as_tool" />
+          </el-form-item>
+          <el-form-item label="浏览器操作（Playwright，需服务端开启）">
+            <el-switch v-model="form.browser" />
           </el-form-item>
           <el-form-item label="子 agent（可委派）">
             <el-select v-model="form.sub_agents" multiple clearable style="width: 100%">

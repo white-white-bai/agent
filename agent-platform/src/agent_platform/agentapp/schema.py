@@ -52,6 +52,7 @@ class AgentAppDef(BaseModel):
     mcp_servers: list[str] = Field(default_factory=list)
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     knowledge_as_tool: bool = True
+    browser: bool = False
     memory: AgentMemoryConfig = Field(default_factory=AgentMemoryConfig)
     planning: bool = False
     reflection_rounds: int = 0

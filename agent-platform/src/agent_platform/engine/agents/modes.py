@@ -9,6 +9,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
+from agent_platform.core.prompt_guard import sanitize_untrusted
 from agent_platform.engine.agents.prompts import build_system_prompt
 from agent_platform.engine.agents.registry import AgentSpec, load_agent, load_template
 from agent_platform.graph.schema import KnowledgeConfig, ToolRef
@@ -40,6 +41,8 @@ class ModeContext:
     toolbox: Any = None
     tool_result_max_chars: int = 4000
     memory_var: str = "user_memory_text"
+    prompt_guard_enabled: bool = False
+    prompt_guard_max_chars: int = 12000
 
 
 def _text(value: Any) -> str:
@@ -51,6 +54,13 @@ def _text(value: Any) -> str:
         return json.dumps(value, ensure_ascii=False)
     except (TypeError, ValueError):
         return str(value)
+
+
+def _observe(mc: ModeContext, value: Any, source: str) -> str:
+    text = _text(value)
+    if not mc.prompt_guard_enabled:
+        return text
+    return sanitize_untrusted(text, source=source, max_chars=mc.prompt_guard_max_chars)
 
 
 async def _ask(
@@ -350,7 +360,7 @@ async def run_react(
         except Exception as exc:  # noqa: BLE001 - 工具失败转为观察结果，继续推理
             result = {"error": str(exc)}
         steps.append({"action": name, "args": args, "result": result})
-        observation = f"{observation}\n{name} -> {_text(result)}".strip()
+        observation = f"{observation}\n{name} -> {_observe(mc, result, name)}".strip()
     if not answer:
         answer = await _ask(mc, spec, base_system, f"{query}\n\n已知观察：\n{observation}\n\n请给出最终答复。")
     return {"answer": answer.strip(), "steps": steps}
@@ -452,7 +462,7 @@ async def run_autonomous(
                         error = True
 
             consecutive_failures = consecutive_failures + 1 if error else 0
-            text_result = _truncate(_text(result), mc.tool_result_max_chars)
+            text_result = _truncate(_observe(mc, result, action_name), mc.tool_result_max_chars)
             if is_native:
                 messages.append(ToolMessage(content=text_result, tool_call_id=call_id))
             else:
@@ -634,7 +644,7 @@ async def run_agent_as_tool(
         sub_system = build_system_prompt(sub_spec, load_template(sub_spec.prompt_template, mc.tenant_code))
         sub_query = str(args.get("query") or query)
         result = await run_spec(sub_spec, mc, variables, sub_query, sub_system)
-        sub_answer = str(result.get("answer") or "")
+        sub_answer = _observe(mc, result.get("answer") or "", code)
         steps.append({"agent": code, "query": sub_query, "answer": sub_answer})
         observation = f"{observation}\n{code} -> {sub_answer}".strip()
     if not answer:

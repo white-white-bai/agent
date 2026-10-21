@@ -82,6 +82,15 @@ class Settings(BaseSettings):
     hitl_webhook_secret: str = ""
     hitl_webhook_timeout_seconds: float = 3.0
 
+    # 浏览器操作（Playwright 可选依赖；AgentAppDef.browser=true 时才装配工具）
+    browser_enabled: bool = False
+    browser_headless: bool = True
+    browser_timeout_ms: int = 15000
+    browser_max_chars: int = 4000
+    browser_allowed_hosts: str = ""
+    browser_allow_private: bool = False
+    browser_screenshot_dir: str = ".run/browser"
+
     # MCP 工具运行时发现：默认关闭，关闭时只用 ap_tool 声明
     tool_discovery_enabled: bool = False
     tool_discovery_ttl_seconds: int = 300
