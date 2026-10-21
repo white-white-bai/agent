@@ -867,6 +867,19 @@ def purge_user_memories(
     return {"data": {"user_key": request.user_key, "deleted": deleted}}
 
 
+@router.post("/user-memories/rebuild-embeddings", dependencies=[Depends(require_permission("memory:write"))])
+async def rebuild_user_memory_embeddings(
+    request: UserMemoryPurgeRequest, principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
+    updated = await memory_store.rebuild_embeddings(
+        get_settings(),
+        _tenant(principal, request.tenant_code),
+        user_key=request.user_key,
+        app_uuid=request.app_uuid,
+    )
+    return {"data": {"updated": updated}}
+
+
 @router.get("/memory/config", dependencies=[Depends(require_permission("memory:read"))])
 def get_memory_config() -> dict[str, Any]:
     settings = get_settings()
@@ -1210,7 +1223,10 @@ def _run_dict(row: Any) -> dict[str, Any]:
         "thread_id": row.thread_id,
         "status": row.status,
         "interrupt_payload": row.interrupt_payload or {},
+        "subgraph_count": len(row.subgraph_snapshot or []),
         "created_by": row.created_by,
+        "resolved_by": row.resolved_by or "",
+        "resolved_at": _iso(row.resolved_at),
         "created_at": _iso(row.created_at),
         "updated_at": _iso(row.updated_at),
     }
@@ -1271,13 +1287,14 @@ async def run_graph_stream(
     hitl = bool(settings.hitl_enabled)
     thread_id = request.thread_id or (uuid.uuid4().hex if hitl else "")
     if hitl:
-        graph_def = services.pin_subgraph_refs(graph_def, app_row.tenant_code)
+        graph_def, subgraph_snapshot = services.pin_subgraph_tree(graph_def, app_row.tenant_code)
         ctx.hitl_enabled = True
         services.create_run(
             tenant_code=app_row.tenant_code,
             app_uuid=app_uuid,
             thread_id=thread_id,
             graph_definition=graph_def.model_dump(mode="json"),
+            subgraph_snapshot=subgraph_snapshot,
             created_by=principal.username,
         )
     tracer = build_request_tracer(
@@ -1300,18 +1317,25 @@ async def run_graph_stream(
             async for item in stream_graph(graph_def, request.inputs, ctx, **kwargs):
                 if hitl and item.get("type") == "interrupt":
                     status = "interrupted"
-                    services.update_run(thread_id, status=status, interrupt_payload=item)
+                    services.update_run(
+                        thread_id, status=status, interrupt_payload=item, if_status=("running",)
+                    )
                 elif hitl and item.get("type") == "error":
                     status = "failed"
+                    services.update_run(
+                        thread_id, status="failed", if_status=("running", "interrupted")
+                    )
                 yield f"data: {json.dumps(item, ensure_ascii=False, default=str)}\n\n"
         except Exception as exc:  # noqa: BLE001 - 流式接口要把错误作为事件回传，不能直接抛
             if hitl:
-                services.update_run(thread_id, status="failed")
+                services.update_run(
+                    thread_id, status="failed", if_status=("running", "interrupted")
+                )
             payload = {"type": "error", "message": str(exc)}
             yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
         finally:
             if hitl and status == "completed":
-                services.update_run(thread_id, status="completed")
+                services.update_run(thread_id, status="completed", if_status=("running",))
             tracer.flush()
 
     return StreamingResponse(
@@ -1329,9 +1353,9 @@ def list_runs(
     limit: int = 50,
     principal: AdminPrincipal = Depends(get_current_admin),
 ) -> dict[str, Any]:
-    rows = services.list_runs(
-        _tenant(principal, tenant_code), app_uuid=app_uuid, status=status, limit=limit
-    )
+    tenant = _tenant(principal, tenant_code)
+    services.expire_stale_runs(get_settings().hitl_run_timeout_seconds, tenant)
+    rows = services.list_runs(tenant, app_uuid=app_uuid, status=status, limit=limit)
     return {"data": [_run_dict(row) for row in rows]}
 
 
@@ -1349,6 +1373,7 @@ async def get_run_detail(
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail=f"运行图定义非法: {exc}") from exc
     ctx.tenant_code = run.tenant_code
+    ctx.resolve_subgraph = services.snapshot_resolver(run.subgraph_snapshot or [])
     snapshot = await build_graph(graph_def, ctx, get_checkpointer()).aget_state(
         {"configurable": {"thread_id": thread_id}}
     )
@@ -1376,19 +1401,30 @@ async def resume_run(
         raise HTTPException(status_code=404, detail="运行记录不存在")
     if run.status != "interrupted":
         raise HTTPException(status_code=409, detail="当前运行不在等待审批状态")
+    pending = (run.interrupt_payload or {}).get("interrupts") or []
+    options: list[str] = []
+    if pending:
+        value = pending[0].get("value") or {}
+        if isinstance(value, dict):
+            options = [str(item) for item in (value.get("options") or [])]
+    if options and request.action not in options:
+        raise HTTPException(status_code=400, detail=f"不支持的动作: {request.action}")
+    actor = principal.username or "anonymous"
+    if not services.claim_run(thread_id, actor):
+        raise HTTPException(status_code=409, detail="当前运行已被其他请求恢复")
     raw_definition = run.graph_definition or request.definition or {}
     try:
         graph_def = GraphDef.model_validate(raw_definition)
     except ValidationError as exc:
+        services.update_run(thread_id, status="failed", if_status=("running",))
         raise HTTPException(status_code=400, detail=f"运行图定义非法: {exc}") from exc
     ctx.tenant_code = run.tenant_code
     ctx.hitl_enabled = True
+    ctx.resolve_subgraph = services.snapshot_resolver(run.subgraph_snapshot or [])
     payload = {"action": request.action, **request.payload}
     interrupt_id = request.interrupt_id
-    if not interrupt_id:
-        pending = (run.interrupt_payload or {}).get("interrupts") or []
-        if pending:
-            interrupt_id = str(pending[0].get("id") or "")
+    if not interrupt_id and pending:
+        interrupt_id = str(pending[0].get("id") or "")
     resume_value = {interrupt_id: payload} if interrupt_id else payload
     command = Command(resume=resume_value)
     tracer = build_request_tracer(
@@ -1412,17 +1448,24 @@ async def resume_run(
             ):
                 if item.get("type") == "interrupt":
                     status = "interrupted"
-                    services.update_run(thread_id, status=status, interrupt_payload=item)
+                    services.update_run(
+                        thread_id, status=status, interrupt_payload=item, if_status=("running",)
+                    )
                 elif item.get("type") == "error":
                     status = "failed"
+                    services.update_run(
+                        thread_id, status="failed", if_status=("running", "interrupted")
+                    )
                 yield f"data: {json.dumps(item, ensure_ascii=False, default=str)}\n\n"
         except Exception as exc:  # noqa: BLE001
-            services.update_run(thread_id, status="failed")
+            services.update_run(
+                thread_id, status="failed", if_status=("running", "interrupted")
+            )
             payload = {"type": "error", "message": str(exc)}
             yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
         finally:
             if status == "completed":
-                services.update_run(thread_id, status="completed")
+                services.update_run(thread_id, status="completed", if_status=("running",))
             tracer.flush()
 
     return StreamingResponse(
@@ -1430,3 +1473,16 @@ async def resume_run(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/runs/{thread_id}/cancel", dependencies=[Depends(require_permission("graph:write"))])
+def cancel_run(
+    thread_id: str, principal: AdminPrincipal = Depends(get_current_admin)
+) -> dict[str, Any]:
+    run = services.get_run(thread_id, principal.scope_tenant())
+    if run is None:
+        raise HTTPException(status_code=404, detail="运行记录不存在")
+    if not services.cancel_run(thread_id, principal.username or "anonymous"):
+        raise HTTPException(status_code=409, detail="当前运行不可取消")
+    row = services.get_run(thread_id)
+    return {"data": _run_dict(row) if row is not None else {"thread_id": thread_id}}

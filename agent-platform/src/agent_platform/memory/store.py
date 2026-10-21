@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -10,6 +11,9 @@ from sqlalchemy import delete, func, or_, select, update
 
 from agent_platform.core.db import session_scope
 from agent_platform.domain.models import UserMemory, UserMemoryState
+from agent_platform.knowledge.embeddings import cosine
+
+logger = logging.getLogger(__name__)
 
 
 def _now() -> datetime:
@@ -202,6 +206,48 @@ def upsert_memory(
                 row.expires_at = expires_at
             session.flush()
             return row
+
+        threshold = float(getattr(settings, "user_memory_dedup_threshold", 0) or 0) if settings else 0.0
+        if threshold > 0 and embedding:
+            limit = int(getattr(settings, "user_memory_max_per_user", 200) or 200)
+            candidates = list(
+                session.scalars(
+                    select(UserMemory)
+                    .where(
+                        UserMemory.tenant_code == tenant_code,
+                        UserMemory.user_key == normalized,
+                        UserMemory.app_uuid == app_uuid,
+                        UserMemory.is_deleted == 0,
+                        UserMemory.kind == (kind or "fact"),
+                    )
+                    .order_by(UserMemory.id.desc())
+                    .limit(max(limit, 1))
+                ).all()
+            )
+            best = None
+            best_score = 0.0
+            for candidate in candidates:
+                if not candidate.embedding:
+                    continue
+                score = cosine(list(embedding), list(candidate.embedding))
+                if score > best_score:
+                    best = candidate
+                    best_score = score
+            if best is not None and best_score >= threshold:
+                # 近似重复：保留原内容与唯一键，只提升重要度并刷新向量/来源
+                best.importance = max(
+                    float(best.importance or 0), max(0.0, min(float(importance), 1.0))
+                )
+                best.embedding = list(embedding)
+                best.embedding_model = embedding_model or best.embedding_model
+                best.updated_at = _now()
+                best.is_deleted = 0
+                best.enabled = 1
+                if expires_at is not None:
+                    best.expires_at = expires_at
+                session.flush()
+                return best
+
         row = UserMemory(
             uuid=uuid.uuid4().hex,
             tenant_code=tenant_code,
@@ -354,6 +400,38 @@ def enforce_limits(settings: Any, tenant_code: str, user_key: str, app_uuid: str
         return max(excess, 0)
 
 
+async def rebuild_embeddings(
+    settings: Any,
+    tenant_code: str,
+    *,
+    user_key: str = "",
+    app_uuid: str = "",
+) -> int:
+    """按当前 embedding 模型/维度重建记忆向量（用于换模型后的迁移）。"""
+    from agent_platform.knowledge.embeddings import Embedder
+
+    embedder = Embedder(settings)
+    model = embedding_model_name(settings)
+    updated = 0
+    with session_scope() as session:
+        stmt = select(UserMemory).where(
+            UserMemory.tenant_code == tenant_code,
+            UserMemory.is_deleted == 0,
+        )
+        if user_key:
+            stmt = stmt.where(UserMemory.user_key == normalize_user_key(user_key))
+        if app_uuid:
+            stmt = stmt.where(UserMemory.app_uuid == app_uuid)
+        for row in session.scalars(stmt).all():
+            try:
+                row.embedding = await embedder.encode(row.content or "")
+                row.embedding_model = model
+                updated += 1
+            except Exception:
+                logger.warning("用户记忆向量重建失败：%s", row.uuid, exc_info=True)
+    return updated
+
+
 def memory_passages(
     tenant_code: str,
     user_key: str,
@@ -361,6 +439,8 @@ def memory_passages(
     *,
     scope: str = "app",
     limit: int = 200,
+    embedding_model: str = "",
+    embedding_dim: int = 0,
 ) -> list[dict[str, Any]]:
     now = _now()
     with session_scope() as session:
@@ -375,12 +455,19 @@ def memory_passages(
             stmt = stmt.where(or_(UserMemory.app_uuid == app_uuid, UserMemory.app_uuid == ""))
         else:
             stmt = stmt.where(UserMemory.app_uuid == app_uuid)
-        rows = list(
-            session.scalars(
-                stmt.order_by(UserMemory.importance.desc(), UserMemory.updated_at.desc())
-                .limit(max(int(limit or 200), 1))
-            ).all()
-        )
+        if embedding_model:
+            # 空 model 视为历史/手工数据，允许参与检索；维度在下面再校验
+            stmt = stmt.where(
+                or_(UserMemory.embedding_model == embedding_model, UserMemory.embedding_model == "")
+            )
+        stmt = stmt.order_by(UserMemory.importance.desc(), UserMemory.updated_at.desc())
+        rows = list(session.scalars(stmt.limit(max(int(limit or 200), 1))).all())
+        if embedding_dim:
+            rows = [
+                row
+                for row in rows
+                if row.embedding and len(row.embedding) == embedding_dim
+            ]
         return [
             {
                 "uuid": row.uuid,

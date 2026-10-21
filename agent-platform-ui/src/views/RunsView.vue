@@ -1,8 +1,8 @@
 <script setup>
 import { computed, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
-import { listRuns, resumeRun } from '@/api'
+import { cancelRun, listRuns, resumeRun } from '@/api'
 import { useTable } from '@/composables/useTable'
 import { useAuthStore } from '@/stores/auth'
 import { formatRunOutput } from '@/utils/run'
@@ -25,6 +25,8 @@ const STATUS_TYPES = {
   interrupted: 'warning',
   completed: 'success',
   failed: 'danger',
+  cancelled: 'info',
+  expired: 'info',
 }
 
 function openResume(row) {
@@ -69,6 +71,21 @@ async function submit() {
     busy.value = false
   }
 }
+
+async function cancel(row) {
+  try {
+    await ElMessageBox.confirm(`确认取消运行 ${row.thread_id}？`, '取消确认', { type: 'warning' })
+  } catch {
+    return
+  }
+  try {
+    await cancelRun(row.thread_id)
+    ElMessage.success('已取消')
+    await reload()
+  } catch (err) {
+    ElMessage.error(err.message || '取消失败')
+  }
+}
 </script>
 
 <template>
@@ -80,6 +97,8 @@ async function submit() {
         <el-option label="运行中" value="running" />
         <el-option label="已完成" value="completed" />
         <el-option label="失败" value="failed" />
+        <el-option label="已取消" value="cancelled" />
+        <el-option label="已过期" value="expired" />
       </el-select>
       <el-button @click="reload">查询</el-button>
     </div>
@@ -93,8 +112,10 @@ async function submit() {
       <el-table-column prop="app_uuid" label="应用" width="180" show-overflow-tooltip />
       <el-table-column prop="thread_id" label="thread_id" min-width="220" show-overflow-tooltip />
       <el-table-column prop="created_by" label="发起人" width="120" />
+      <el-table-column prop="resolved_by" label="审批人" width="120" />
+      <el-table-column prop="resolved_at" label="审批时间" width="170" />
       <el-table-column prop="created_at" label="创建时间" width="170" />
-      <el-table-column label="操作" width="130" fixed="right">
+      <el-table-column label="操作" width="180" fixed="right">
         <template #default="{ row }">
           <el-button
             v-if="row.status === 'interrupted' && auth.can('graph:write')"
@@ -102,6 +123,12 @@ async function submit() {
             type="primary"
             @click="openResume(row)"
           >审批/恢复</el-button>
+          <el-button
+            v-if="(row.status === 'interrupted' || row.status === 'running') && auth.can('graph:write')"
+            link
+            type="danger"
+            @click="cancel(row)"
+          >取消</el-button>
         </template>
       </el-table-column>
     </el-table>

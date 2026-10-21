@@ -77,6 +77,8 @@ class Settings(BaseSettings):
     # checkpointer / 人在环（默认关闭）
     checkpointer_enabled: bool = False
     hitl_enabled: bool = False
+    # 等待审批的运行超过该秒数后标记 expired；0 = 不自动过期
+    hitl_run_timeout_seconds: int = 0
 
     # 动态子图（默认关闭）
     subgraph_enabled: bool = False

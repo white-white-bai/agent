@@ -10,6 +10,7 @@ import {
   listUserMemories,
   purgeUserMemories,
   recallUserMemory,
+  rebuildUserMemoryEmbeddings,
   updateUserMemory,
 } from '@/api'
 import { useTable } from '@/composables/useTable'
@@ -145,6 +146,24 @@ async function purge() {
   }
 }
 
+async function rebuildEmbeddings() {
+  try {
+    await ElMessageBox.confirm('按当前 embedding 模型重建记忆向量？旧向量会被覆盖。', '重建向量', { type: 'warning' })
+  } catch {
+    return
+  }
+  try {
+    const result = await rebuildUserMemoryEmbeddings({
+      tenant_code: filters.tenant_code,
+      user_key: filters.user_key,
+      app_uuid: '',
+    })
+    ElMessage.success(`已重建 ${(result && result.updated) || 0} 条`)
+  } catch (error) {
+    ElMessage.error(error.message || '重建失败')
+  }
+}
+
 function openRecall(row) {
   recallForm.user_key = row ? row.user_key : filters.user_key
   recallForm.app_uuid = row ? row.app_uuid : ''
@@ -196,6 +215,7 @@ onMounted(loadMeta)
       <el-button @click="refresh">查询</el-button>
       <el-button v-if="auth.can('memory:write')" type="primary" @click="openCreate">新增记忆</el-button>
       <el-button v-if="auth.can('memory:write')" type="danger" plain @click="purge">按用户清除</el-button>
+      <el-button v-if="auth.can('memory:write')" @click="rebuildEmbeddings">重建向量</el-button>
       <el-button @click="openRecall(null)">召回测试</el-button>
     </div>
 

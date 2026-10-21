@@ -10,9 +10,10 @@ from agent_platform.api import services
 from agent_platform.core.config import Settings
 from agent_platform.core.db import session_scope
 from agent_platform.domain.models import Graph, GraphVersion
+from agent_platform.engine import nodes
 from agent_platform.engine.context import EngineContext
 from agent_platform.engine.runtime import run_graph
-from agent_platform.graph.schema import GraphDef
+from agent_platform.graph.schema import CodeInput, GraphDef, SubgraphConfig
 
 
 class ScriptedLLM:
@@ -74,6 +75,29 @@ async def test_single_subgraph_executes_and_returns_answer(seed_app):
 
 
 @pytest.mark.asyncio
+async def test_subgraph_input_mapping_and_output_var(seed_app):
+    child_uuid, _ = seed_app(
+        tenant_code="t",
+        app_id="child",
+        api_key="key-child",
+        definition=_answer_graph("{{ topic }}"),
+    )
+    parent = GraphDef.model_validate(
+        _parent(
+            child_uuid,
+            inputs=[{"name": "topic", "expression": "query"}],
+            output_var="sub_out",
+        )
+    )
+
+    state = await run_graph(parent, {"query": "hello"}, _ctx(ScriptedLLM(["unused"])))
+
+    assert state["answer"] == "hello"
+    assert state["variables"]["sub_out"] == "hello"
+    assert state["variables"]["sub2"]["answer"] == "hello"
+
+
+@pytest.mark.asyncio
 async def test_candidate_router_selects_registered_subgraph(seed_app):
     child_a, _ = seed_app(tenant_code="t", app_id="child-a", api_key="key-a", definition=_answer_graph("A"))
     child_b, _ = seed_app(tenant_code="t", app_id="child-b", api_key="key-b", definition=_answer_graph("B"))
@@ -103,6 +127,60 @@ async def test_subgraph_disabled_raises(seed_app):
 
     with pytest.raises(ValueError, match="子图功能未启用"):
         await run_graph(parent, {"query": "hi"}, ctx)
+
+
+def test_pin_subgraph_tree_pins_nested_versions(seed_app):
+    child_uuid, _ = seed_app(
+        tenant_code="t", app_id="child", api_key="key-child", definition=_answer_graph("C")
+    )
+    middle_uuid, _ = seed_app(
+        tenant_code="t",
+        app_id="middle",
+        api_key="key-middle",
+        definition=_parent(child_uuid, version=None),
+    )
+    parent_def = GraphDef.model_validate(_parent(middle_uuid, version=None))
+
+    pinned, snapshot = services.pin_subgraph_tree(parent_def, "t")
+
+    assert pinned.node("sub2").typed_config().version == 1
+    keys = {(item["app_uuid"], item["version"], item["template_key"]) for item in snapshot}
+    assert (middle_uuid, 1, "") in keys
+    assert (child_uuid, 1, "") in keys
+    middle = next(item for item in snapshot if item["app_uuid"] == middle_uuid)
+    middle_def = GraphDef.model_validate(middle["definition"])
+    assert middle_def.node("sub2").typed_config().version == 1
+
+
+def test_subgraph_output_preserves_parent_context():
+    config = SubgraphConfig(
+        inputs=[CodeInput(name="topic", expression="query")],
+        output_var="sub_out",
+    )
+    parent_state = {
+        "inputs": {"x": 1},
+        "variables": {"query": "hello"},
+        "query": "hello",
+        "route": "keep",
+        "error": "parent-error",
+    }
+
+    mapped = nodes.map_subgraph_inputs(config, parent_state, "parent-key")
+    assert mapped["inputs"] == {"topic": "hello", "query": "hello"}
+
+    result = nodes.store_subgraph_output(
+        "sub2",
+        config,
+        {**mapped, "answer": "A", "route": "child-route"},
+        "parent-key",
+    )
+
+    assert result["answer"] == "A"
+    assert result["inputs"] == {"x": 1}
+    assert result["route"] == "keep"
+    assert result["error"] == "parent-error"
+    assert result["variables"]["sub_out"] == "A"
+    assert result["variables"]["sub2"] == {"answer": "A", "candidate": "child-route"}
 
 
 def test_publish_rejects_subgraph_when_feature_disabled(api_client, seed_app):

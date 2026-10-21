@@ -11,8 +11,11 @@ CREATE TABLE IF NOT EXISTS ap_run (
     thread_id         VARCHAR(128) NOT NULL,
     status            VARCHAR(16)  NOT NULL DEFAULT 'running',
     graph_definition  JSON         NULL,
+    subgraph_snapshot JSON         NULL,
     interrupt_payload JSON         NULL,
     created_by        VARCHAR(64)  NOT NULL DEFAULT '',
+    resolved_by       VARCHAR(64)  NOT NULL DEFAULT '',
+    resolved_at       DATETIME     NULL,
     created_at        DATETIME     NOT NULL,
     updated_at        DATETIME     NOT NULL,
     PRIMARY KEY (id),
@@ -21,3 +24,32 @@ CREATE TABLE IF NOT EXISTS ap_run (
     KEY idx_ap_run_status (status),
     KEY idx_ap_run_app (app_uuid)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '管理端图运行记录（HITL 中断/恢复）';
+
+DROP PROCEDURE IF EXISTS ap_add_run_subgraph_snapshot;
+DELIMITER $$
+CREATE PROCEDURE ap_add_run_subgraph_snapshot()
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ap_run' AND COLUMN_NAME = 'subgraph_snapshot'
+    ) THEN
+        ALTER TABLE ap_run ADD COLUMN subgraph_snapshot JSON NULL AFTER graph_definition;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ap_run' AND COLUMN_NAME = 'resolved_by'
+    ) THEN
+        ALTER TABLE ap_run ADD COLUMN resolved_by VARCHAR(64) NOT NULL DEFAULT '' AFTER created_by;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ap_run' AND COLUMN_NAME = 'resolved_at'
+    ) THEN
+        ALTER TABLE ap_run ADD COLUMN resolved_at DATETIME NULL AFTER resolved_by;
+    END IF;
+END$$
+DELIMITER ;
+CALL ap_add_run_subgraph_snapshot();
+DROP PROCEDURE ap_add_run_subgraph_snapshot;

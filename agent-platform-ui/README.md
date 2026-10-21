@@ -17,8 +17,8 @@ agent 中台的独立管理端。Vue 3 + Vite + Element Plus + Pinia + vue-route
 | `/prompts` | `PromptsView` | 少样本提示词模板（system 骨架 + 示例 + CoT 提示） |
 | `/mcp` | `McpServersView` | 工具（MCP server）配置 |
 | `/knowledge` | `KnowledgeView` | 知识库：创建向导（选数据源→分段与清洗含预览→处理完成）、知识库列表（建/改/删）、文档管理（上传/进度/批量/重传/状态轮询/每文档覆盖分段）、分段查看编辑、召回测试 |
-| `/memory` | `MemoryView` | 用户级长期记忆：筛选 / 增删改 / 召回测试 / 按用户清除 / 开关只读回显 |
-| `/runs` | `RunsView` | 管理端运行记录：等待审批的 HITL 运行、审批/恢复、状态筛选 |
+| `/memory` | `MemoryView` | 用户级长期记忆：筛选 / 增删改 / 召回测试 / 按用户清除 / 按当前模型重建向量 / 开关只读回显 |
+| `/runs` | `RunsView` | 管理端运行记录：等待审批的 HITL 运行、审批/恢复、取消、审批人/时间、状态筛选 |
 | `/guards` | `GuardsView` | 护栏总开关、敏感词、配额 / 限流 / 轮次、兜底回复 |
 | `/accounts` | `AccountsView` | 账号与角色 |
 | `/metrics` | `MetricsView` | 监控看板（会话 / 消息 / 满意度 / Token / 异常趋势） |

@@ -367,10 +367,12 @@ python -m agent_platform.worker.main
   命中写入 `inputs.user_memory`（结构化）与 `inputs.user_memory_text`（文本）；autonomous 模式自动把后者注入 system 消息，
   其它模式可在提示词里写 `{{ user_memory_text }}`。
 - 管理端：`GET /admin/user-memories`、`GET /admin/user-memories/users`、`POST|PUT|DELETE /admin/user-memories*`、
-  `POST /admin/user-memories/recall`、`POST /admin/user-memories/purge`、`GET /admin/memory/config`；
-  前端「用户记忆」页支持筛选、增删改、召回测试与按用户物理清除。
+  `POST /admin/user-memories/recall`、`POST /admin/user-memories/purge`、
+  `POST /admin/user-memories/rebuild-embeddings`、`GET /admin/memory/config`；
+  前端「用户记忆」页支持筛选、增删改、召回测试、按用户物理清除与按当前模型重建向量。
 - 隐私：`request.user` 目前是客户端自报，生产必须由网关注入可信 user 并开启管理端鉴权；`purge` 会物理删除
-  记忆与水位线；修改 `AP_EMBEDDING_DIM` / embedding 模型后旧记忆向量会失效，需要重建。
+  记忆与水位线；召回按当前 `AP_EMBEDDING_MODEL` / `AP_EMBEDDING_DIM` 过滤失效向量，修改模型或维度后
+  用 `rebuild-embeddings` 重建（可限定 `user_key` / `app_uuid`）。
 
 老库执行 `sql/migrate_user_memory.sql`；新建库直接用 `sql/ddl.sql`。
 
@@ -384,6 +386,10 @@ python -m agent_platform.worker.main
 - 恢复：`POST /admin/runs/{thread_id}/resume`（权限 `graph:write`），body `{interrupt_id, action, payload}`；
   `action=approve/reject` 通过审批节点的出边句柄路由。`GET /admin/runs` 列表、`GET /admin/runs/{thread_id}` 查看
   `values/next/interrupts`。前端图编辑器运行对话框与「运行记录」页可直接审批/恢复。
+- 取消与审计：`POST /admin/runs/{thread_id}/cancel`（权限 `graph:write`）把 `running/interrupted` 置为
+  `cancelled`；恢复/取消/超时都会写 `resolved_by` / `resolved_at`。两个恢复请求并发时只有一个能原子抢占成功。
+- 超时回收：`AP_HITL_RUN_TIMEOUT_SECONDS>0` 时，`GET /admin/runs` 会把超过该时长仍处于 `interrupted` 的运行
+  标记为 `expired`；`0`（默认）关闭。
 - **对外 `/v1`、云智链路不暴露 interrupt**：审批节点在外部链路按 `default_action` 自动通过，仍以
   `message`/`message_end` 收尾，Java/前端协议零改动。
 - `interrupt()` 恢复会从头重跑审批节点，审批节点只做纯表达式求值；不要在审批节点前放不可重入的副作用。
@@ -397,9 +403,12 @@ python -m agent_platform.worker.main
 - `subgraph` 节点支持单子图（`app_uuid` + `version` / `template_key`）或候选子图 `candidates` +
   `router`（智能体 code）；`router` 为空时用 `state.route` 或第一个候选。
 - **只引用已注册/已发布图或内置模板**；发布时递归校验引用存在、同租户、无环、嵌套深度不超过
-  `AP_SUBGRAPH_MAX_DEPTH`；候选子图编译为 langgraph 原生子图，父图通过条件边路由，`route` 契约不变。
-- HITL 运行启动时把未钉版本的 `app_uuid` 引用解析成具体版本并写入 `ap_run.graph_definition` 快照，
-  保证 interrupt 后 resume 不受后续发布/回滚影响。
+  `AP_SUBGRAPH_MAX_DEPTH`，并把未钉版本的引用固化为当前发布版号；候选子图编译为 langgraph 原生子图，
+  父图通过条件边路由，`route` 契约不变。
+- 子图节点的 `inputs`（表达式）、`query`（模板）与 `output_var` 在编译子图链路同样生效；输出只回写
+  `answer` / `variables`，父图的 `inputs` / `route` / `error` 不会被覆盖。
+- HITL 运行启动时把未钉版本的 `app_uuid` 引用递归解析成具体版本，并把嵌套子图定义写入
+  `ap_run.subgraph_snapshot`；resume / 详情优先用该快照，不受后续发布或回滚影响。
 - 管理端 `GET /admin/graphs` 返回可引用的应用与模板；图编辑器新增「子图」「人工审批」节点。
 - 子图内部节点事件本批不展开，流式只报父图节点；子图内 `interrupt` 的恢复留待后续。
 

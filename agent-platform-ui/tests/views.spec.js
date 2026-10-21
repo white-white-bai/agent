@@ -66,6 +66,7 @@ vi.mock('@/api', () => ({
   listRuns: vi.fn(async () => []),
   getRun: vi.fn(async () => ({})),
   resumeRun: vi.fn(async () => ({})),
+  cancelRun: vi.fn(async () => ({})),
   getMemoryConfig: vi.fn(async () => ({ enabled: false, write_enabled: false, recall_enabled: false })),
   listUserMemories: vi.fn(async () => ({ items: [], total: 0 })),
   listMemoryUsers: vi.fn(async () => []),
@@ -74,6 +75,7 @@ vi.mock('@/api', () => ({
   deleteUserMemory: vi.fn(async () => ({})),
   recallUserMemory: vi.fn(async () => ({ hits: [] })),
   purgeUserMemories: vi.fn(async () => ({ deleted: 0 })),
+  rebuildUserMemoryEmbeddings: vi.fn(async () => ({ updated: 0 })),
   metricsOverview: vi.fn(async () => ({})),
 }))
 

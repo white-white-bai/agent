@@ -363,8 +363,11 @@ class Run(Base):
     thread_id: Mapped[str] = mapped_column(String(128), index=True)
     status: Mapped[str] = mapped_column(String(16), default="running")
     graph_definition: Mapped[dict] = mapped_column(JSON, default=dict)
+    subgraph_snapshot: Mapped[list] = mapped_column(JSON, default=list)
     interrupt_payload: Mapped[dict] = mapped_column(JSON, default=dict)
     created_by: Mapped[str] = mapped_column(String(64), default="")
+    resolved_by: Mapped[str] = mapped_column(String(64), default="")
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 

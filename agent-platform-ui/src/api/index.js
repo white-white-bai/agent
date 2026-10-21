@@ -39,6 +39,7 @@ export const listRuns = (params) => request('/admin/runs', { params })
 export const getRun = (threadId) => request(`/admin/runs/${threadId}`)
 export const resumeRun = (threadId, body, onEvent, options) =>
   streamRequest(`/admin/runs/${threadId}/resume`, body, onEvent, options)
+export const cancelRun = (threadId) => request(`/admin/runs/${threadId}/cancel`, { method: 'POST' })
 
 // 护栏：敏感词 + 进程级开关
 export const listSensitiveWords = (params) => request('/admin/sensitive-words', { params })
@@ -106,6 +107,8 @@ export const updateUserMemory = (uuid, body) => request(`/admin/user-memories/${
 export const deleteUserMemory = (uuid) => request(`/admin/user-memories/${uuid}`, { method: 'DELETE' })
 export const recallUserMemory = (body) => request('/admin/user-memories/recall', { method: 'POST', body })
 export const purgeUserMemories = (body) => request('/admin/user-memories/purge', { method: 'POST', body })
+export const rebuildUserMemoryEmbeddings = (body) =>
+  request('/admin/user-memories/rebuild-embeddings', { method: 'POST', body })
 
 // 监控看板
 export const metricsOverview = (params) => request('/admin/metrics/overview', { params })

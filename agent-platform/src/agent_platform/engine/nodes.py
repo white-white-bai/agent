@@ -402,6 +402,54 @@ def run_approval(node: NodeDef, state: GraphState, ctx: EngineContext) -> GraphS
     return next_state
 
 
+def map_subgraph_inputs(
+    config: Any, state: GraphState, parent_key: str = "__ap_parent__"
+) -> GraphState:
+    """把父图变量按 SubgraphConfig.inputs 映射成子图 inputs；query 用配置模板渲染。"""
+    variables = dict(state.get("variables", {}))
+    variables[parent_key] = {
+        "inputs": dict(state.get("inputs") or {}),
+        "route": state.get("route", ""),
+        "error": state.get("error", ""),
+    }
+    mapped = {
+        item.name: evaluate(item.expression, variables)
+        for item in (getattr(config, "inputs", None) or [])
+        if item.name
+    }
+    if not mapped:
+        mapped = dict(state.get("inputs") or {})
+    raw_query = str(getattr(config, "query", "") or "")
+    query = str(state.get("query") or "")
+    if raw_query:
+        try:
+            query = render(raw_query, variables)
+        except Exception:  # noqa: BLE001 - 模板变量缺失时退回父图 query
+            query = str(state.get("query") or "")
+    if query and "query" not in mapped:
+        mapped["query"] = query
+    return {**state, "inputs": mapped, "variables": variables}
+
+
+def store_subgraph_output(
+    node_id: str, config: Any, state: GraphState, parent_key: str = "__ap_parent__"
+) -> GraphState:
+    """把子图最终答复写到 output_var，并把结构化结果写到 variables[node_id]。"""
+    variables = dict(state.get("variables", {}))
+    parent = variables.pop(parent_key, None)
+    answer = str(state.get("answer") or "")
+    child_route = str(state.get("route") or "")
+    output_var = str(getattr(config, "output_var", "") or "subgraph_result")
+    variables[output_var] = answer
+    variables[node_id] = {"answer": answer, "candidate": child_route}
+    result = {**state, "variables": variables, "answer": answer}
+    if isinstance(parent, dict):
+        result["inputs"] = parent.get("inputs") or {}
+        result["route"] = parent.get("route", "")
+        result["error"] = parent.get("error", "")
+    return result
+
+
 async def run_subgraph_node(node: NodeDef, state: GraphState, ctx: EngineContext) -> GraphState:
     """单点运行子图节点（编辑器「运行此节点」）；候选多选时使用第一个。"""
     from agent_platform.engine.builder import build_graph
@@ -422,15 +470,8 @@ async def run_subgraph_node(node: NodeDef, state: GraphState, ctx: EngineContext
     if child_def is None:
         raise ValueError(f"子图不存在或不可见：{refs[0].app_uuid or refs[0].template_key}")
     child = build_graph(child_def, ctx, None)
-    result = await child.ainvoke({"inputs": dict(state.get("variables") or {})})
-    variables = _variables(state)
-    variables[config.output_var] = result.get("answer", "")
-    variables[node.id] = result
-    return {
-        **state,
-        "variables": variables,
-        "answer": result.get("answer", state.get("answer", "")),
-    }
+    result = await child.ainvoke(map_subgraph_inputs(config, state))
+    return store_subgraph_output(node.id, config, result)
 
 
 def run_end(node: NodeDef, state: GraphState, ctx: EngineContext) -> GraphState:

@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from agent_platform.core.db import session_scope
 from agent_platform.domain.models import (
@@ -25,6 +26,10 @@ from agent_platform.engine.context import LLMInvoker
 from agent_platform.graph.schema import GraphDef, NodeType, SubgraphRef
 
 logger = logging.getLogger("agent_platform.memory")
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 SUMMARY_SYSTEM_PROMPT = (
     "你是会话摘要助手。把给定的历史对话压缩成简洁中文摘要，保留事实、结论、"
@@ -216,6 +221,8 @@ def publish_draft(
             return None
         graph_def = GraphDef.model_validate(payload)
         validate_subgraph_refs(graph_def, tenant_code)
+        graph_def = pin_subgraph_refs(graph_def, tenant_code)
+        payload = graph_def.model_dump(mode="json")
         version = GraphVersion(
             uuid=_new_uuid(),
             graph_uuid=graph.uuid,
@@ -397,6 +404,91 @@ def pin_subgraph_refs(graph_def: GraphDef, tenant_code: str = "") -> GraphDef:
     return graph_def
 
 
+def _pin_subgraph_tree(
+    graph_def: GraphDef,
+    tenant_code: str,
+    depth: int,
+    limit: int,
+    snapshot: dict[tuple[str, int | None, str], dict[str, Any]],
+    visited: set[tuple[str, int | None, str]],
+) -> None:
+    for node in graph_def.nodes:
+        if node.type != NodeType.SUBGRAPH:
+            continue
+        config = node.typed_config()
+        refs = _subgraph_refs(config)
+        for ref in refs:
+            if not ref.template_key and ref.app_uuid and ref.version is None:
+                version = _published_version_number(ref.app_uuid, tenant_code)
+                if version is not None:
+                    ref.version = version
+            key = (ref.app_uuid, ref.version, ref.template_key)
+            if key in visited:
+                continue
+            child = resolve_subgraph(ref, tenant_code)
+            if child is None:
+                continue
+            if depth < limit:
+                _pin_subgraph_tree(child, tenant_code, depth + 1, limit, snapshot, visited | {key})
+            snapshot[key] = child.model_dump(mode="json")
+        if config.candidates:
+            config.candidates = refs
+        elif refs:
+            config.app_uuid = refs[0].app_uuid
+            config.template_key = refs[0].template_key
+            config.version = refs[0].version
+        node.config = config.model_dump(mode="json")
+
+
+def pin_subgraph_tree(
+    graph_def: GraphDef,
+    tenant_code: str = "",
+    *,
+    max_depth: int | None = None,
+) -> tuple[GraphDef, list[dict[str, Any]]]:
+    """递归钉死子图版本，并返回可直接恢复的嵌套子图定义快照。"""
+    from agent_platform.core.config import get_settings
+
+    snapshot: dict[tuple[str, int | None, str], dict[str, Any]] = {}
+    limit = int(max_depth or get_settings().subgraph_max_depth or 2)
+    _pin_subgraph_tree(graph_def, tenant_code, 0, limit, snapshot, set())
+    items = [
+        {
+            "app_uuid": key[0],
+            "version": key[1],
+            "template_key": key[2],
+            "definition": definition,
+        }
+        for key, definition in snapshot.items()
+    ]
+    return graph_def, items
+
+
+def snapshot_resolver(snapshot: list[dict[str, Any]] | None):
+    """用 ap_run.subgraph_snapshot 构建 resolver，恢复时优先使用运行快照。"""
+    mapping: dict[tuple[str, int | None, str], dict[str, Any]] = {}
+    for item in snapshot or []:
+        if not isinstance(item, dict):
+            continue
+        key = (
+            str(item.get("app_uuid") or ""),
+            item.get("version"),
+            str(item.get("template_key") or ""),
+        )
+        definition = item.get("definition")
+        if isinstance(definition, dict):
+            mapping[key] = definition
+
+    def _resolve(ref: SubgraphRef, tenant_code: str = "") -> GraphDef | None:
+        key = (ref.app_uuid, ref.version, ref.template_key)
+        definition = mapping.get(key)
+        if definition is not None:
+            return GraphDef.model_validate(definition)
+        return resolve_subgraph(ref, tenant_code)
+
+    return _resolve
+
+
 def list_subgraph_options(tenant_code: str = "") -> dict[str, Any]:
     from agent_platform.api import graph_templates
 
@@ -440,6 +532,7 @@ def create_run(
     app_uuid: str,
     thread_id: str,
     graph_definition: dict[str, Any],
+    subgraph_snapshot: list[dict[str, Any]] | None = None,
     created_by: str = "",
 ) -> Run:
     with session_scope() as session:
@@ -452,8 +545,11 @@ def create_run(
                 thread_id=thread_id,
                 status="running",
                 graph_definition=graph_definition,
+                subgraph_snapshot=list(subgraph_snapshot or []),
                 interrupt_payload={},
                 created_by=created_by,
+                resolved_by="",
+                resolved_at=None,
             )
             session.add(row)
             session.flush()
@@ -461,9 +557,12 @@ def create_run(
         row.tenant_code = tenant_code
         row.app_uuid = app_uuid
         row.graph_definition = graph_definition
+        row.subgraph_snapshot = list(subgraph_snapshot or [])
         row.status = "running"
         row.interrupt_payload = {}
         row.created_by = created_by or row.created_by
+        row.resolved_by = ""
+        row.resolved_at = None
         session.flush()
         return row
 
@@ -504,19 +603,78 @@ def update_run(
     status: str | None = None,
     interrupt_payload: dict[str, Any] | None = None,
     graph_definition: dict[str, Any] | None = None,
+    if_status: tuple[str, ...] | None = None,
 ) -> Run | None:
     with session_scope() as session:
         row = session.scalar(select(Run).where(Run.thread_id == thread_id))
         if row is None:
             return None
+        if if_status is not None and row.status not in if_status:
+            return row
         if status is not None:
             row.status = status
+            if status == "interrupted":
+                row.resolved_by = ""
+                row.resolved_at = None
         if interrupt_payload is not None:
             row.interrupt_payload = interrupt_payload
         if graph_definition is not None:
             row.graph_definition = graph_definition
         session.flush()
         return row
+
+
+def claim_run(thread_id: str, resolved_by: str = "") -> bool:
+    """原子地把 interrupted 置为 running；并发恢复只有一个请求能成功。"""
+    with session_scope() as session:
+        result = session.execute(
+            update(Run)
+            .where(Run.thread_id == thread_id, Run.status == "interrupted")
+            .values(
+                status="running",
+                resolved_by=resolved_by or "anonymous",
+                resolved_at=_utcnow(),
+                updated_at=_utcnow(),
+            )
+        )
+        return int(result.rowcount or 0) == 1
+
+
+def cancel_run(thread_id: str, resolved_by: str = "") -> bool:
+    with session_scope() as session:
+        result = session.execute(
+            update(Run)
+            .where(Run.thread_id == thread_id, Run.status.in_(("running", "interrupted")))
+            .values(
+                status="cancelled",
+                resolved_by=resolved_by or "anonymous",
+                resolved_at=_utcnow(),
+                updated_at=_utcnow(),
+            )
+        )
+        return int(result.rowcount or 0) == 1
+
+
+def expire_stale_runs(timeout_seconds: int, tenant_code: str = "") -> int:
+    if int(timeout_seconds or 0) <= 0:
+        return 0
+    cutoff = _utcnow() - timedelta(seconds=int(timeout_seconds))
+    with session_scope() as session:
+        stmt = update(Run).where(
+            Run.status == "interrupted",
+            Run.updated_at < cutoff,
+        )
+        if tenant_code:
+            stmt = stmt.where(Run.tenant_code == tenant_code)
+        result = session.execute(
+            stmt.values(
+                status="expired",
+                resolved_by="system:timeout",
+                resolved_at=_utcnow(),
+                updated_at=_utcnow(),
+            )
+        )
+        return int(result.rowcount or 0)
 
 
 # --------------------------------------------------------------------------- 会话 / 消息

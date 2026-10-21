@@ -127,6 +127,115 @@ def test_upsert_dedups_and_keeps_scope_isolation():
     assert len(store.list_memories("t")[0]) == 3
 
 
+def test_upsert_near_duplicate_merges_by_cosine_threshold():
+    settings = _settings(embedding_dim=2, user_memory_dedup_threshold=0.9)
+    first = store.upsert_memory(
+        tenant_code="t",
+        app_uuid="a1",
+        user_key="u1",
+        kind="fact",
+        content="喜欢简洁",
+        embedding=[1.0, 0.0],
+        embedding_model="hash:2",
+        settings=settings,
+    )
+    second = store.upsert_memory(
+        tenant_code="t",
+        app_uuid="a1",
+        user_key="u1",
+        kind="fact",
+        content="喜欢简洁回答",
+        embedding=[0.99, 0.1],
+        embedding_model="hash:2",
+        settings=settings,
+    )
+
+    assert first.uuid == second.uuid
+    rows, total = store.list_memories("t", user_key="u1", app_uuid="a1")
+    assert total == 1
+    assert rows[0].content == "喜欢简洁"
+
+
+def test_upsert_below_threshold_inserts_new_row():
+    settings = _settings(embedding_dim=2, user_memory_dedup_threshold=0.99)
+    first = store.upsert_memory(
+        tenant_code="t",
+        app_uuid="a1",
+        user_key="u1",
+        kind="fact",
+        content="喜欢简洁",
+        embedding=[1.0, 0.0],
+        embedding_model="hash:2",
+        settings=settings,
+    )
+    second = store.upsert_memory(
+        tenant_code="t",
+        app_uuid="a1",
+        user_key="u1",
+        kind="fact",
+        content="喜欢详细",
+        embedding=[0.0, 1.0],
+        embedding_model="hash:2",
+        settings=settings,
+    )
+
+    assert first.uuid != second.uuid
+    assert store.list_memories("t", user_key="u1", app_uuid="a1")[1] == 2
+
+
+@pytest.mark.asyncio
+async def test_recall_filters_stale_embedding_model():
+    settings = _settings(embedding_dim=16)
+    store.create_memory(
+        tenant_code="t",
+        app_uuid="a1",
+        user_key="u1",
+        kind="fact",
+        content="旧模型记忆",
+        embedding=[1.0] * 16,
+        embedding_model="old:model",
+        settings=settings,
+    )
+    current = "当前模型记忆"
+    vector = await Embedder(settings).encode(current)
+    store.create_memory(
+        tenant_code="t",
+        app_uuid="a1",
+        user_key="u1",
+        kind="fact",
+        content=current,
+        embedding=vector,
+        embedding_model="hash:16",
+        settings=settings,
+    )
+
+    hits = await recall(settings, tenant_code="t", app_uuid="a1", user_key="u1", query=current)
+
+    assert [item["content"] for item in hits] == [current]
+
+
+@pytest.mark.asyncio
+async def test_rebuild_embeddings_updates_model():
+    settings = _settings(embedding_dim=16)
+    row = store.create_memory(
+        tenant_code="t",
+        app_uuid="a1",
+        user_key="u1",
+        kind="fact",
+        content="需要重建",
+        embedding=[0.0] * 16,
+        embedding_model="old:model",
+        settings=settings,
+    )
+
+    updated = await store.rebuild_embeddings(settings, "t", user_key="u1", app_uuid="a1")
+
+    assert updated == 1
+    refreshed = store.get_memory(row.uuid)
+    assert refreshed.embedding_model == "hash:16"
+    assert len(refreshed.embedding) == 16
+
+
 @pytest.mark.asyncio
 async def test_recall_only_returns_matching_user_and_app():
     settings = _settings()

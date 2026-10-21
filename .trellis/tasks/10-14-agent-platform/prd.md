@@ -320,7 +320,8 @@
 - [x] SQL：`sql/ddl.sql` 同步新表/列；新增 `sql/migrate_checkpoint_hitl.sql`、`sql/migrate_user_memory.sql`、`sql/migrate_runs.sql`
 - [x] 测试：新增 `test_user_memory.py`、`test_hitl.py`、`test_checkpoint_wiring.py`、`test_subgraph.py`；扩展 `test_checkpoint.py`；前端补 run/api/views/components/nodeMeta 用例
 - [x] 文档：`agent-platform/README.md`、`.env.example`、`agent-platform-ui/README.md`、`AGENTS.md`/`CLAUDE.md`
-- [ ] 未纳入：子图内部 interrupt 的事件展开与恢复、运行 cancel、用户记忆跨应用聚合的独立 UI（当前用 `AP_USER_MEMORY_SCOPE` 配置）
+- [x] P0 加固（2026-10-20）：HITL 恢复原子抢占、`/admin/runs/{thread_id}/cancel` 与前端取消、`resolved_by/resolved_at` 审计、`AP_HITL_RUN_TIMEOUT_SECONDS` 回收超时 `interrupted`；子图发布递归钉版本、HITL 运行写 `subgraph_snapshot` 并在详情/恢复时优先使用、`inputs/query/output_var` 在编译子图链路生效且不覆盖父图上下文；用户记忆近似去重、按当前 embedding 模型/维度过滤旧向量、`rebuild-embeddings` 接口与管理端按钮
+- [ ] 未纳入：子图内部 interrupt 的事件展开与恢复、用户记忆跨应用聚合的独立 UI（当前用 `AP_USER_MEMORY_SCOPE` 配置）
 
 **M1～M4 决策清单**：无未交付项。
 

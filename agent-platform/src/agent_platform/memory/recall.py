@@ -6,7 +6,12 @@ from typing import Any
 
 from agent_platform.knowledge.embeddings import Embedder
 from agent_platform.knowledge.vector_store import retrieve_hits
-from agent_platform.memory.store import memory_passages, normalize_user_key, touch_hits
+from agent_platform.memory.store import (
+    embedding_model_name,
+    memory_passages,
+    normalize_user_key,
+    touch_hits,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,16 +29,20 @@ async def recall(
     normalized = normalize_user_key(user_key)
     if not normalized or not (query or "").strip():
         return []
+    mode = str(getattr(settings, "user_memory_mode", "vector") or "vector")
+    query_vector = [] if mode == "fulltext" else await Embedder(settings).encode(query)
+    model = embedding_model_name(settings) if mode != "fulltext" else ""
     passages = memory_passages(
         tenant_code,
         normalized,
         app_uuid,
         scope=str(getattr(settings, "user_memory_scope", "app") or "app"),
         limit=int(getattr(settings, "user_memory_max_per_user", 200) or 200),
+        embedding_model=model,
+        embedding_dim=len(query_vector) if model else 0,
     )
     if not passages:
         return []
-    query_vector = await Embedder(settings).encode(query)
     hits = await retrieve_hits(
         passages=passages,
         query=query,
@@ -44,7 +53,7 @@ async def recall(
             if score_threshold is not None
             else getattr(settings, "user_memory_score_threshold", None)
         ),
-        mode=str(getattr(settings, "user_memory_mode", "vector") or "vector"),
+        mode=mode,
     )
     by_content = {item["content"]: item for item in passages}
     memories: list[dict[str, Any]] = []

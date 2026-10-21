@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
+import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -207,7 +208,31 @@ def build_graph(
                     depth=depth + 1,
                     visited=visited_set | {ref_key},
                 )
-                sg.add_node(f"{node.id}__{index}", child)
+                child_id = f"{node.id}__{index}"
+                input_id = f"{node.id}__{index}__in"
+                output_id = f"{node.id}__{index}__out"
+                parent_key = f"__ap_parent_{uuid.uuid4().hex}"
+
+                def input_fn(
+                    state: GraphState,
+                    _config: SubgraphConfig = config,
+                    _parent_key: str = parent_key,
+                ) -> GraphState:
+                    return nodes.map_subgraph_inputs(_config, state, _parent_key)
+
+                def output_fn(
+                    state: GraphState,
+                    _config: SubgraphConfig = config,
+                    _node_id: str = node.id,
+                    _parent_key: str = parent_key,
+                ) -> GraphState:
+                    return nodes.store_subgraph_output(_node_id, _config, state, _parent_key)
+
+                sg.add_node(input_id, input_fn)
+                sg.add_node(child_id, child)
+                sg.add_node(output_id, output_fn)
+                sg.add_edge(input_id, child_id)
+                sg.add_edge(child_id, output_id)
                 keys.append(key)
 
             async def router_fn(
@@ -229,15 +254,15 @@ def build_graph(
             sg.add_conditional_edges(
                 node.id,
                 route_fn,
-                {key: f"{node.id}__{index}" for index, key in enumerate(keys)},
+                {key: f"{node.id}__{index}__in" for index, key in enumerate(keys)},
             )
             outgoing = graph_def.outgoing(node.id)
             for index in range(len(refs)):
-                child_id = f"{node.id}__{index}"
+                output_id = f"{node.id}__{index}__out"
                 if not outgoing:
-                    sg.add_edge(child_id, END)
+                    sg.add_edge(output_id, END)
                 for edge in outgoing:
-                    sg.add_edge(child_id, edge.target)
+                    sg.add_edge(output_id, edge.target)
             continue
         if node.type == NodeType.CONDITION:
             route_fn, path_map = _condition_paths(graph_def, node)

@@ -64,6 +64,7 @@ describe('api endpoint map', () => {
     ['listGraphOptions', () => api.listGraphOptions({ tenant_code: 't' }), '/admin/graphs', { params: { tenant_code: 't' } }],
     ['listRuns', () => api.listRuns({ status: 'interrupted' }), '/admin/runs', { params: { status: 'interrupted' } }],
     ['getRun', () => api.getRun('t1'), '/admin/runs/t1', undefined],
+    ['cancelRun', () => api.cancelRun('t1'), '/admin/runs/t1/cancel', { method: 'POST' }],
     ['getMemoryConfig', () => api.getMemoryConfig(), '/admin/memory/config', undefined],
     ['listUserMemories', () => api.listUserMemories({ user_key: 'u' }), '/admin/user-memories', { params: { user_key: 'u' } }],
     ['listMemoryUsers', () => api.listMemoryUsers({ tenant_code: 't' }), '/admin/user-memories/users', { params: { tenant_code: 't' } }],
@@ -72,6 +73,7 @@ describe('api endpoint map', () => {
     ['deleteUserMemory', () => api.deleteUserMemory('m1'), '/admin/user-memories/m1', { method: 'DELETE' }],
     ['recallUserMemory', () => api.recallUserMemory({ query: 'q' }), '/admin/user-memories/recall', { method: 'POST', body: { query: 'q' } }],
     ['purgeUserMemories', () => api.purgeUserMemories({ user_key: 'u' }), '/admin/user-memories/purge', { method: 'POST', body: { user_key: 'u' } }],
+    ['rebuildUserMemoryEmbeddings', () => api.rebuildUserMemoryEmbeddings({ user_key: 'u' }), '/admin/user-memories/rebuild-embeddings', { method: 'POST', body: { user_key: 'u' } }],
     ['metricsOverview', () => api.metricsOverview({ days: 7 }), '/admin/metrics/overview', { params: { days: 7 } }],
   ]
 
