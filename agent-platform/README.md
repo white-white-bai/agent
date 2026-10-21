@@ -120,7 +120,7 @@ python -m agent_platform.importer app.yml --llm-provider deepseek --retriever li
 - **list-operator**：`variable` + `operation`（first / last / at / limit / filter / sort / size）映射；不识别的操作提示并退化为 `first`。
 - **LLM context**：Dify 节点勾选 `context` 时，提示词里的 `{{#context#}}` 会被就地展开成上下文变量；若提示词未引用 `{{#context#}}`，则落到节点的 `context` 字段（运行时拼进提示词）。
 
-## 多智能体编排（Agent 节点 + 8 种工作模式）
+## 多智能体编排（Agent 节点 + 9 种工作模式）
 
 引擎新增 `agent` 节点，引用 `ap_agent` 里的智能体定义（管理端「智能体」页维护）：
 
@@ -131,7 +131,7 @@ python -m agent_platform.importer app.yml --llm-provider deepseek --retriever li
 `variables[output_var]` 存最终答复字符串；`variables[node_id]` 存结构化结果（`answer` / `reasoning` / `steps` / `sources` / `reflection` / `mode`），
 `supervisor` 模式的 `route` 会写进 `state.route`，配合带句柄的出边做动态路由。
 
-**8 种工作模式**（智能体定义里选，或节点上 `mode` 覆盖）：
+**9 种工作模式**（智能体定义里选，或节点上 `mode` 覆盖）：
 
 | 模式 | 行为 |
 | --- | --- |
@@ -141,6 +141,7 @@ python -m agent_platform.importer app.yml --llm-provider deepseek --retriever li
 | `reflection` | 生成 → 自我审查 → 修订，迭代 `reflection_rounds` 次 |
 | `supervisor` | 路由模型每轮挑一个成员执行，直到 finish；终选写 `state.route` |
 | `pipeline` | 按 `pipeline` 顺序依次执行，上游结果作为下游输入 |
+| `consensus` | 成员独立作答，多数票直接选；平票交给裁决器合并，返回结构化 handoff |
 | `agent_as_tool` | 把子智能体暴露为 `agent:<code>` 工具，主智能体通过 Action 委派（递归深度上限 3） |
 | `deep_search` | 查询改写 → 多轮检索去重（`ctx.retriever`）→ 基于资料作答并标注引用 |
 

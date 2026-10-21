@@ -363,7 +363,7 @@ def run_list_operator(node: NodeDef, state: GraphState, ctx: EngineContext) -> G
 
 
 async def run_agent_node(node: NodeDef, state: GraphState, ctx: EngineContext) -> GraphState:
-    """智能体节点：按 8 种工作模式执行。"""
+    """智能体节点：按 9 种工作模式执行。"""
     config: AgentConfig = node.typed_config()
     variables = _variables(state)
     result = await ctx.agents(config, variables, ctx, ctx.tenant_code)

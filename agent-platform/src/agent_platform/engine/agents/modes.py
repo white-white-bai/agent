@@ -1,9 +1,10 @@
-"""8 种 Agent 工作模式：react / autonomous / plan_execute / reflection / supervisor / pipeline / agent_as_tool / deep_search。"""
+"""9 种 Agent 工作模式：react / autonomous / plan_execute / reflection / supervisor / pipeline / consensus / agent_as_tool / deep_search。"""
 from __future__ import annotations
 
 import json
 import logging
 import re
+from collections import Counter
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -613,6 +614,51 @@ async def run_supervisor(
     return {"answer": history[-1]["answer"] if history else "", "steps": history, "route": route}
 
 
+async def run_consensus(
+    spec: AgentSpec, mc: ModeContext, variables: dict[str, Any], query: str, system: str
+) -> dict[str, Any]:
+    """多数投票：成员独立作答，票数过半直接选；平票交给裁决器合并。"""
+    members = spec.pipeline
+    if not members:
+        return await run_react(spec, mc, variables, query, system)
+    steps: list[dict[str, Any]] = []
+    answers: list[tuple[str, str]] = []
+    for code in members:
+        sub_spec = load_agent(code, mc.tenant_code, spec.max_steps)
+        sub_system = build_system_prompt(sub_spec, load_template(sub_spec.prompt_template, mc.tenant_code))
+        try:
+            result = await run_spec(sub_spec, mc, variables, query, sub_system)
+            answer = str(result.get("answer") or "").strip()
+        except Exception as exc:  # noqa: BLE001 - 单个成员失败不阻断其它成员
+            answer = ""
+            steps.append({"agent": code, "answer": "", "error": str(exc)})
+            continue
+        steps.append({"agent": code, "answer": answer})
+        if answer:
+            answers.append((code, answer))
+    if not answers:
+        return {"answer": "", "steps": steps, "route": "", "handoffs": []}
+    counts = Counter(answer for _code, answer in answers)
+    winner, votes = counts.most_common(1)[0]
+    route = next(code for code, answer in answers if answer == winner) if votes * 2 > len(answers) else "consensus"
+    if route == "consensus":
+        catalog = "\n\n".join(f"[{code}]\n{answer}" for code, answer in answers)
+        winner = (
+            await _ask(
+                mc,
+                spec,
+                "你是多 Agent 投票裁决器。综合候选回答，只输出最终答复正文，不要解释。",
+                f"任务：{query}\n\n候选回答：\n{catalog}",
+                temperature=0.0,
+            )
+        ).strip() or winner
+    handoffs = [
+        {"from_agent": spec.code, "to_agent": code, "status": "ok", "answer": answer}
+        for code, answer in answers
+    ]
+    return {"answer": winner, "steps": steps, "route": route, "handoffs": handoffs}
+
+
 async def run_agent_as_tool(
     spec: AgentSpec, mc: ModeContext, variables: dict[str, Any], query: str, system: str
 ) -> dict[str, Any]:
@@ -705,6 +751,7 @@ MODES: dict[str, Any] = {
     "reflection": run_reflection,
     "supervisor": run_supervisor,
     "pipeline": run_pipeline,
+    "consensus": run_consensus,
     "agent_as_tool": run_agent_as_tool,
     "deep_search": run_deep_search,
 }

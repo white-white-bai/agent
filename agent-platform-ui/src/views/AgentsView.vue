@@ -10,7 +10,7 @@ const auth = useAuthStore()
 const filters = reactive({ tenant_code: '' })
 const { rows, loading, reload } = useTable(() => listAgents({ tenant_code: filters.tenant_code }))
 
-const MODES = ['react', 'autonomous', 'plan_execute', 'reflection', 'supervisor', 'pipeline', 'agent_as_tool', 'deep_search']
+const MODES = ['react', 'autonomous', 'plan_execute', 'reflection', 'supervisor', 'pipeline', 'consensus', 'agent_as_tool', 'deep_search']
 const ROLES = ['intent', 'retrieval', 'generate', 'compliance', 'custom']
 
 const dialogVisible = ref(false)

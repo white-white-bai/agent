@@ -183,7 +183,7 @@ class TemplateTransformConfig(BaseModel):
     output_var: str = "output"
 
 
-# Agent 支持的 8 种工作模式
+# Agent 支持的 9 种工作模式
 AGENT_MODES = (
     "react",
     "autonomous",
@@ -193,6 +193,7 @@ AGENT_MODES = (
     "pipeline",
     "agent_as_tool",
     "deep_search",
+    "consensus",
 )
 
 

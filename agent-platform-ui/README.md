@@ -13,7 +13,7 @@ agent 中台的独立管理端。Vue 3 + Vite + Element Plus + Pinia + vue-route
 | `/apps/:appUuid/graph` | `GraphEditorView` | 图编辑器（AntV X6）、草稿保存、发布、版本回滚、Dify DSL 导入、运行（整图流式 SSE + 单节点运行 + HITL 审批/恢复） |
 | `/apps/:appUuid/agent` | `AgentConfigView` | 真自主 Agent 配置（指令/模型/工具/知识/记忆/规划/反思/子 agent/HITL）+ 调试对话台（流式 token、工具与规划事件、HITL 批准/拒绝） |
 | `/providers` | `ProvidersView` | 大模型 / 检索 / 向量 / 观测 provider 配置（含检索流水线只读回显） |
-| `/agents` | `AgentsView` | 智能体定义（角色 / 8 种工作模式 / 工具 / 提示词 / CoT） |
+| `/agents` | `AgentsView` | 智能体定义（角色 / 9 种工作模式 / 工具 / 提示词 / CoT） |
 | `/tools` | `ToolsView` | 生产级工具声明（参数 schema / 重试 / 兜底）与试调 |
 | `/tool-audits` | `ToolAuditsView` | 工具调用审计：租户/工具/状态筛选，参数、错误与耗时 |
 | `/prompts` | `PromptsView` | 少样本提示词模板（system 骨架 + 示例 + CoT 提示） |

@@ -9,6 +9,7 @@ from agent_platform.engine import nodes
 from agent_platform.engine.agents.modes import (
     ModeContext,
     run_agent_as_tool,
+    run_consensus,
     run_deep_search,
     run_pipeline,
     run_plan_execute,
@@ -191,6 +192,36 @@ async def test_reflection_stops_when_critic_is_satisfied():
 
 
 # --------------------------------------------------------------------------- pipeline / supervisor / agent-as-tool
+
+
+@pytest.mark.asyncio
+async def test_consensus_majority_vote_and_handoffs():
+    _seed_agent("member.one", mode="react", system_prompt="一")
+    _seed_agent("member.two", mode="react", system_prompt="二")
+    _seed_agent("member.three", mode="react", system_prompt="三")
+    llm = ScriptedLLM(["相同答案", "相同答案", "另一个答案"])
+    spec = _spec(mode="consensus", pipeline=["member.one", "member.two", "member.three"])
+
+    result = await run_consensus(spec, _mc(llm), {}, "任务", "system")
+
+    assert result["answer"] == "相同答案"
+    assert len(result["steps"]) == 3
+    assert len(result["handoffs"]) == 3
+    assert result["handoffs"][0]["from_agent"] == spec.code
+    assert result["handoffs"][0]["to_agent"] == "member.one"
+
+
+@pytest.mark.asyncio
+async def test_consensus_tie_uses_judge():
+    _seed_agent("member.one", mode="react", system_prompt="一")
+    _seed_agent("member.two", mode="react", system_prompt="二")
+    llm = ScriptedLLM(["答案 A", "答案 B", "合并答案"])
+    spec = _spec(mode="consensus", pipeline=["member.one", "member.two"])
+
+    result = await run_consensus(spec, _mc(llm), {}, "任务", "system")
+
+    assert result["answer"] == "合并答案"
+    assert result["route"] == "consensus"
 
 
 @pytest.mark.asyncio

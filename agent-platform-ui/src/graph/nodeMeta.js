@@ -275,7 +275,7 @@ export const NODE_TYPES = [
     type: 'agent',
     label: '智能体',
     color: '#5a54f9',
-    summary: '按角色与 8 种工作模式编排的多智能体节点',
+    summary: '按角色与 9 种工作模式编排的多智能体节点',
     fields: [
       { key: 'agent', label: '智能体', kind: 'agent-select', help: '来自「智能体」页的定义' },
       {
