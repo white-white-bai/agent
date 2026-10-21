@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -347,14 +348,56 @@ def render_report(report: EvalReport) -> str:
     return "\n".join(lines)
 
 
+def build_llm_judge(provider: str = "") -> Judge:
+    """用配置的 OpenAI 兼容模型做 answer 质量评审；失败用例会给出 0 分。"""
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from agent_platform.core.config import get_settings
+    from agent_platform.models.factory import build_chat_model
+
+    settings = get_settings()
+
+    async def judge(query: str, answer: str, case: EvalCase) -> dict[str, Any]:
+        model = build_chat_model(settings, provider, temperature=0.0, max_tokens=400)
+        response = await model.ainvoke(
+            [
+                SystemMessage(
+                    "你是严格的 Agent 评测员。只输出 JSON："
+                    '{"score": 0 到 1 的小数, "reason": "一句话理由"}。'
+                    "按任务是否完成、关键事实是否齐全、是否有明显幻觉打分。"
+                ),
+                HumanMessage(
+                    f"任务：{query}\n"
+                    f"必须覆盖的关键点：{case.answer_contains}\n"
+                    f"候选回答：{answer}"
+                ),
+            ]
+        )
+        text = str(getattr(response, "content", response) or "")
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            return {"score": 0.0, "reason": f"judge 未返回 JSON：{text[:200]}"}
+        try:
+            payload = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return {"score": 0.0, "reason": f"judge JSON 非法：{text[:200]}"}
+        return payload
+
+    return judge
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="回放 Agent 轨迹并按标准工具路径打分")
     parser.add_argument("--cases", required=True, help="评测用例 JSON/JSONL")
     parser.add_argument("--traces", required=True, help="录制轨迹 JSON/JSONL")
     parser.add_argument("--json", action="store_true", help="输出 JSON 报告")
+    parser.add_argument("--judge-provider", default="", help="启用 LLM judge 的模型 key（留空不启用）")
     args = parser.parse_args(argv)
 
-    report = _run_async(evaluate_cases(load_cases(args.cases), load_traces(args.traces)))
+    judge = build_llm_judge(args.judge_provider) if args.judge_provider else None
+    report = _run_async(
+        evaluate_cases(load_cases(args.cases), load_traces(args.traces), judge=judge)
+    )
     if args.json:
         print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
     else:

@@ -102,3 +102,26 @@ def test_docker_nonzero_exit_reports_stderr(monkeypatch):
 
     with pytest.raises(CodeExecutionError, match="boom"):
         run_code(_config(), {"n": 21})
+
+
+def test_docker_image_allowlist_and_output_limit(monkeypatch):
+    monkeypatch.setattr(code_sandbox.shutil, "which", lambda name: "/usr/bin/docker")
+    monkeypatch.setattr(
+        code_sandbox,
+        "get_settings",
+        lambda: _settings(code_sandbox_allowed_images="other:latest"),
+    )
+    with pytest.raises(CodeExecutionError, match="白名单"):
+        run_code(_config(), {"n": 21})
+
+    def huge_run(command, **kwargs):
+        return subprocess.CompletedProcess(command, 0, stdout="x" * 100, stderr="")
+
+    monkeypatch.setattr(
+        code_sandbox,
+        "get_settings",
+        lambda: _settings(code_sandbox_max_output_bytes=10),
+    )
+    monkeypatch.setattr(code_sandbox.subprocess, "run", huge_run)
+    with pytest.raises(CodeExecutionError, match="输出超过上限"):
+        run_code(_config(), {"n": 21})

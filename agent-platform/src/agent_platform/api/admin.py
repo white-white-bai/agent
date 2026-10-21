@@ -1017,6 +1017,7 @@ def migrate_user_memories(
             target_user_key=request.target_user_key,
             source_app_uuid=request.source_app_uuid,
             target_app_uuid=request.target_app_uuid,
+            target_tenant_code=_tenant(principal, request.target_tenant_code or request.tenant_code),
             delete_source=request.delete_source,
         )
     except ValueError as exc:

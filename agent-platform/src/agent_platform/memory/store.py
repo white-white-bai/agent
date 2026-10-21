@@ -178,14 +178,21 @@ def migrate_memories(
     target_user_key: str,
     source_app_uuid: str = "",
     target_app_uuid: str = "",
+    target_tenant_code: str = "",
     delete_source: bool = False,
 ) -> dict[str, int]:
     """把源用户的记忆批量复制到目标用户/应用；可选迁移（成功后删除源）。"""
     source = normalize_user_key(source_user_key)
     target = normalize_user_key(target_user_key)
+    target_tenant = target_tenant_code or tenant_code
     if not source or not target:
         raise ValueError("源/目标 user_key 不能为空")
-    if delete_source and source == target and (not target_app_uuid or target_app_uuid == source_app_uuid):
+    if (
+        delete_source
+        and source == target
+        and target_tenant == tenant_code
+        and (not target_app_uuid or target_app_uuid == source_app_uuid)
+    ):
         raise ValueError("源和目标相同，不能删除源")
     items = export_memories(
         tenant_code, user_key=source, app_uuid=source_app_uuid
@@ -195,7 +202,7 @@ def migrate_memories(
         target_app = target_app_uuid or str(item.get("app_uuid") or "")
         expires_at = str(item.get("expires_at") or "")
         upsert_memory(
-            tenant_code=tenant_code,
+            tenant_code=target_tenant,
             app_uuid=target_app,
             user_key=target,
             user_name=str(item.get("user_name") or target),

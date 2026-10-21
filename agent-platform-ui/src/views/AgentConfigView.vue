@@ -49,6 +49,9 @@ const form = reactive({
   mcp_servers: [],
   knowledge_as_tool: true,
   browser: false,
+  browser_allowed_hosts: '',
+  browser_allow_private: false,
+  browser_storage_state: '',
   dataset_ids: [],
   retriever: 'builtin',
   top_k: 5,
@@ -81,6 +84,9 @@ function buildDefinition() {
     },
     knowledge_as_tool: form.knowledge_as_tool,
     browser: form.browser,
+    browser_allowed_hosts: form.browser_allowed_hosts,
+    browser_allow_private: form.browser_allow_private,
+    browser_storage_state: form.browser_storage_state,
     memory: { window: form.memory_window, summary_enabled: form.summary_enabled },
     planning: form.planning,
     reflection_rounds: form.reflection_rounds,
@@ -106,6 +112,9 @@ function applyDefinition(definition) {
     mcp_servers: def.mcp_servers || [],
     knowledge_as_tool: def.knowledge_as_tool ?? true,
     browser: Boolean(def.browser),
+    browser_allowed_hosts: def.browser_allowed_hosts || '',
+    browser_allow_private: Boolean(def.browser_allow_private),
+    browser_storage_state: def.browser_storage_state || '',
     dataset_ids: knowledge.dataset_ids || [],
     retriever: knowledge.retriever || 'builtin',
     top_k: knowledge.top_k ?? 5,
@@ -340,6 +349,15 @@ onMounted(async () => {
           </el-form-item>
           <el-form-item label="浏览器操作（Playwright，需服务端开启）">
             <el-switch v-model="form.browser" />
+          </el-form-item>
+          <el-form-item v-if="form.browser" label="浏览器 host 白名单（逗号分隔，留空用全局）">
+            <el-input v-model="form.browser_allowed_hosts" placeholder="example.com,internal.example" />
+          </el-form-item>
+          <el-form-item v-if="form.browser" label="允许访问私网（仍需全局 AP_BROWSER_ALLOW_PRIVATE=true）">
+            <el-switch v-model="form.browser_allow_private" />
+          </el-form-item>
+          <el-form-item v-if="form.browser" label="登录态文件（storage_state，可空）">
+            <el-input v-model="form.browser_storage_state" placeholder=".run/browser/agent-state.json" />
           </el-form-item>
           <el-form-item label="子 agent（可委派）">
             <el-select v-model="form.sub_agents" multiple clearable style="width: 100%">

@@ -188,6 +188,20 @@ def test_export_and_migrate_user_memories(api_client):
     assert store.list_memories("t", user_key="u1")[1] == 0
     assert store.list_memories("t", user_key="u3")[1] == 2
 
+    cross = api_client.post(
+        "/admin/user-memories/migrate",
+        json={
+            "tenant_code": "t",
+            "target_tenant_code": "t2",
+            "source_user_key": "u3",
+            "target_user_key": "u4",
+            "target_app_uuid": "c1",
+        },
+    )
+    assert cross.status_code == 200
+    assert store.list_memories("t2", user_key="u4", app_uuid="c1")[1] == 2
+    assert store.list_memories("t", user_key="u3")[1] == 2
+
 
 def test_upsert_near_duplicate_merges_by_cosine_threshold():
     settings = _settings(embedding_dim=2, user_memory_dedup_threshold=0.9)

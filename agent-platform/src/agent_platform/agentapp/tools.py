@@ -4,13 +4,14 @@
 """
 from __future__ import annotations
 
+import copy
 import logging
 from typing import Any
 
 from langchain_core.tools import StructuredTool
 from pydantic import Field, create_model
 
-from agent_platform.agentapp.schema import AgentAppDef, AgentToolRef
+from agent_platform.agentapp.schema import AgentAppDef, AgentHandoff, AgentToolRef
 from agent_platform.core.config import Settings
 from agent_platform.core.prompt_guard import sanitize_untrusted
 from agent_platform.engine.context import EngineContext
@@ -59,6 +60,25 @@ def _guard(settings: Settings, value: Any, source: str) -> Any:
         source=source,
         max_chars=int(getattr(settings, "prompt_guard_max_chars", 12000) or 12000),
     )
+
+
+def _browser_settings(settings: Settings, agent_def: AgentAppDef) -> Settings:
+    """按 Agent 收紧浏览器权限；未配置时沿用全局设置。"""
+    update: dict[str, Any] = {}
+    if agent_def.browser_allowed_hosts:
+        update["browser_allowed_hosts"] = agent_def.browser_allowed_hosts
+    if agent_def.browser_storage_state:
+        update["browser_storage_state"] = agent_def.browser_storage_state
+    # 私网访问默认收紧：只有 Agent 与全局都显式开启才允许
+    update["browser_allow_private"] = bool(
+        getattr(settings, "browser_allow_private", False) and agent_def.browser_allow_private
+    )
+    if hasattr(settings, "model_copy"):
+        return settings.model_copy(update=update)
+    clone = copy.copy(settings)
+    for key, value in update.items():
+        setattr(clone, key, value)
+    return clone
 
 
 def _args_schema(tool_name: str, params: list[dict[str, Any]]) -> type:
@@ -151,14 +171,36 @@ def _sub_agent_tool(code: str, agent_def: AgentAppDef, settings: Settings, ctx: 
 
     async def _run(query: str) -> str:
         if depth >= settings.agent_app_depth:
-            return "委派深度已达上限，请自行作答。"
+            return AgentHandoff(
+                from_agent=agent_def.name,
+                to_agent=code,
+                status="error",
+                answer="委派深度已达上限，请自行作答。",
+                detail={"depth": depth},
+            ).model_dump_json()
         sub_spec = load_agent(code, tenant_code, settings.agent_app_max_steps)
         sub_def = agent_def_from_spec(sub_spec)
-        result = await run_agent(
-            sub_def, {"query": query}, ctx, checkpointer=None, thread_id=f"{thread_id}:{code}",
-            tenant_code=tenant_code, depth=depth + 1,
-        )
-        return _guard(settings, str(result.get("answer") or ""), f"{DELEGATE_PREFIX}{code}")
+        try:
+            result = await run_agent(
+                sub_def, {"query": query}, ctx, checkpointer=None, thread_id=f"{thread_id}:{code}",
+                tenant_code=tenant_code, depth=depth + 1,
+            )
+        except Exception as exc:  # noqa: BLE001 - 委派失败以结构化错误交回父 Agent
+            return AgentHandoff(
+                from_agent=agent_def.name,
+                to_agent=code,
+                status="error",
+                answer=f"子 Agent 执行失败: {exc}",
+                detail={"depth": depth},
+            ).model_dump_json()
+        answer = _guard(settings, str(result.get("answer") or ""), f"{DELEGATE_PREFIX}{code}")
+        return AgentHandoff(
+            from_agent=agent_def.name,
+            to_agent=code,
+            status="ok",
+            answer=str(answer),
+            detail={"depth": depth + 1},
+        ).model_dump_json()
 
     return StructuredTool.from_function(
         coroutine=_run,
@@ -252,7 +294,7 @@ async def build_agent_tools(
 
         tools.extend(
             build_browser_tools(
-                settings,
+                _browser_settings(settings, agent_def),
                 thread_id,
                 guard=lambda value, source: _guard(settings, value, source),
             )

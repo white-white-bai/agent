@@ -207,7 +207,7 @@ start → 意图识别 → 知识检索 → 内容生成 → 合规质检 → �
 
 - **定义**：`agentapp/schema.py::AgentAppDef`；存 `ap_agent_app` / `ap_agent_app_version`（草稿 + 发布版本，与图应用同构）。
 - **运行时**：`[规划?] → agent ⟲ 工具 → [反思] → 收尾`。`agent` 节点绑定工具（`bind_tools`）由模型自行决定调用；`plan` / `reflect` 为配置开关。
-- **工具**：`ap_tool` 声明按 name 引用，`params`（`{name,type,required,enum,description}`）转成 function-calling 的 JSON Schema；执行统一走 `call_declared_tool`（复用参数校验 / 重试 / 兜底）。知识库可暴露为 `knowledge_search` 工具；`sub_agents` 把子智能体暴露为 `delegate_<code>` 工具（`AP_AGENT_APP_DEPTH` 限制递归深度）；`mcp_servers` 会调 `tools/list` **动态发现** MCP 工具（`inputSchema` 自动转参模型，发现失败降级不阻断）。
+- **工具**：`ap_tool` 声明按 name 引用，`params`（`{name,type,required,enum,description}`）转成 function-calling 的 JSON Schema；执行统一走 `call_declared_tool`（复用参数校验 / 重试 / 兜底）。知识库可暴露为 `knowledge_search` 工具；`sub_agents` 把子智能体暴露为 `delegate_<code>` 工具（`AP_AGENT_APP_DEPTH` 限制递归深度），返回结构化 `AgentHandoff` JSON（`from_agent` / `to_agent` / `status` / `answer` / `detail`）；`mcp_servers` 会调 `tools/list` **动态发现** MCP 工具（`inputSchema` 自动转参模型，发现失败降级不阻断）。
 - **记忆**：自研 `MySQLCheckpointSaver` 按 `thread_id = conversation_id` **跨轮持久** agent 消息；`memory.window` 控制送模型的裁剪条数，`summary`（沿用 `AP_HISTORY_SUMMARY_*`）作为长窗口压缩注入。
 - **Human-in-the-loop**：`hitl.policy` = `off`（默认）/ `before_all_tools` / `before_listed`。命中策略的工具调用前 `interrupt` 暂停本轮，对外 SSE 仍以**正常的 `message_end`**返回审批提示（不引入未知事件，兼容链路安全）；管理端 `POST /admin/apps/{uuid}/agent/resume` 以 `Command(resume=...)` 批准/拒绝续跑。会话存在待审批中断时，新一轮不静默续跑。
 - **外部审批通知**：配置 `AP_HITL_WEBHOOK_URL` 后，图运行与 Agent 应用中断时向 Webhook POST `{event, payload}`（含 `thread_id` / `app_uuid` / `resume_endpoint` / 中断载荷）；`AP_HITL_WEBHOOK_SECRET` 作为 `X-Webhook-Secret` 发送。通知失败只记日志，不阻断审批和 SSE。
@@ -238,6 +238,7 @@ python scripts/eval_agent_traces.py \
   --cases evals/agent_cases.example.jsonl \
   --traces evals/agent_traces.example.jsonl
 # 失败返回 1，可直接接 CI；--json 输出结构化报告
+# 需要质量评审时追加 --judge-provider <AP_LLM_MODELS 的 key>
 ```
 
 录制真实运行（服务已启动、Agent 已发布）：
@@ -256,6 +257,7 @@ python scripts/record_agent_trace.py \
 
 默认用例要求工具序列完全一致（`min_path_score=1.0`）；给测试数据时用 `min_path_score` 放宽部分匹配。
 `tests/test_agent_eval.py` 已把示例文件作为 CI 门禁，并提供 judge/禁用工具/偏离路径的单元用例。
+仓库根目录 `.github/workflows/ci.yml` 会跑 ruff、后端全量 pytest、示例轨迹评测和前端测试/lint。
 
 ## 工具声明与调用治理
 
@@ -438,6 +440,7 @@ python -m agent_platform.worker.main
   `POST|PUT|DELETE /admin/user-memories*`、`POST /admin/user-memories/recall`、`POST /admin/user-memories/purge`、
   `POST /admin/user-memories/rebuild-embeddings`、`GET /admin/memory/config`；
   前端「用户记忆」页支持筛选、增删改、召回测试、按用户物理清除、按当前模型重建向量、按用户跨应用汇总，以及 JSON 导出/批量迁移。
+- 迁移：`POST /admin/user-memories/migrate` 默认同租户；全局管理员（未绑定租户）可传 `target_tenant_code` 做跨租户复制/迁移。
 - 隐私：`request.user` 目前是客户端自报，生产必须由网关注入可信 user 并开启管理端鉴权；`purge` 会物理删除
   记忆与水位线；召回按当前 `AP_EMBEDDING_MODEL` / `AP_EMBEDDING_DIM` 过滤失效向量，修改模型或维度后
   用 `rebuild-embeddings` 重建（可限定 `user_key` / `app_uuid`）。

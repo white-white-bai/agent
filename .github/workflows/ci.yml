@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent-platform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+      - run: python -m ruff check .
+      - run: python -m pytest -q
+      - name: Agent trace eval gate
+        run: |
+          python scripts/eval_agent_traces.py \
+            --cases evals/agent_cases.example.jsonl \
+            --traces evals/agent_traces.example.jsonl
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent-platform-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: agent-platform-ui/package-lock.json
+      - run: npm ci
+      - run: npm test -- --run
+      - run: npm run lint

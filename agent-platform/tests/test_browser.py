@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from agent_platform.agentapp.schema import AgentAppDef
-from agent_platform.agentapp.tools import build_agent_tools
+from agent_platform.agentapp.tools import _browser_settings, build_agent_tools
 from agent_platform.core.config import Settings
 from agent_platform.engine.context import EngineContext
 from agent_platform.tools import browser
@@ -32,6 +32,31 @@ def test_validate_url_allowlist_and_private_override():
 
     private = SimpleNamespace(browser_allowed_hosts="", browser_allow_private=True)
     assert browser.validate_url("http://127.0.0.1:8000", private).startswith("http://")
+
+
+def test_agent_browser_settings_can_only_narrow_global_permissions():
+    global_settings = Settings(
+        browser_allowed_hosts="global.example",
+        browser_allow_private=True,
+        browser_storage_state="global.json",
+    )
+    agent = AgentAppDef(
+        browser=True,
+        browser_allowed_hosts="agent.example",
+        browser_allow_private=False,
+        browser_storage_state="agent.json",
+    )
+
+    effective = _browser_settings(global_settings, agent)
+
+    assert effective.browser_allowed_hosts == "agent.example"
+    assert effective.browser_storage_state == "agent.json"
+    assert effective.browser_allow_private is False
+
+    opted_in = _browser_settings(
+        global_settings, AgentAppDef(browser=True, browser_allow_private=True)
+    )
+    assert opted_in.browser_allow_private is True
 
 
 @pytest.mark.asyncio

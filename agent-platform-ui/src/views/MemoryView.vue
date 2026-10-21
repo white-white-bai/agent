@@ -56,6 +56,7 @@ const migrating = ref(false)
 const migrateForm = reactive({
   source_user_key: '',
   source_app_uuid: '',
+  target_tenant_code: '',
   target_user_key: '',
   target_app_uuid: '',
   delete_source: false,
@@ -221,6 +222,7 @@ async function exportMemories() {
 function openMigrate() {
   migrateForm.source_user_key = filters.user_key
   migrateForm.source_app_uuid = ''
+  migrateForm.target_tenant_code = filters.tenant_code
   migrateForm.target_user_key = ''
   migrateForm.target_app_uuid = ''
   migrateForm.delete_source = false
@@ -399,6 +401,9 @@ onMounted(loadMeta)
         </el-form-item>
         <el-form-item label="源应用 uuid（留空表示全部应用）">
           <el-input v-model="migrateForm.source_app_uuid" />
+        </el-form-item>
+        <el-form-item label="目标租户（留空同源；跨租户需全局管理员）">
+          <el-input v-model="migrateForm.target_tenant_code" />
         </el-form-item>
         <el-form-item label="目标用户 user_key">
           <el-input v-model="migrateForm.target_user_key" />

@@ -316,6 +316,7 @@ class UserMemoryPurgeRequest(BaseModel):
 
 class UserMemoryMigrateRequest(BaseModel):
     tenant_code: str = ""
+    target_tenant_code: str = ""
     source_user_key: str
     target_user_key: str
     source_app_uuid: str = ""

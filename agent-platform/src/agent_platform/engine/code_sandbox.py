@@ -88,6 +88,14 @@ def _run_docker(config: CodeConfig, variables: dict[str, Any], settings: Any) ->
     payload = json.dumps(
         {"code": config.code, "inputs": inputs}, ensure_ascii=False, default=str
     )
+    image = str(getattr(settings, "code_sandbox_image", "python:3.11-slim") or "python:3.11-slim")
+    allowed = [
+        item.strip()
+        for item in str(getattr(settings, "code_sandbox_allowed_images", "") or "").split(",")
+        if item.strip()
+    ]
+    if allowed and image not in allowed:
+        raise CodeExecutionError(f"代码沙箱镜像不在白名单：{image}")
     container_name = f"ap-code-{uuid.uuid4().hex}"
     timeout = max(
         0.1,
@@ -112,6 +120,13 @@ def _run_docker(config: CodeConfig, variables: dict[str, Any], settings: Any) ->
         "ALL",
         "--security-opt",
         "no-new-privileges",
+        "--ipc",
+        "none",
+        "--init",
+        "--stop-timeout",
+        "1",
+        "--ulimit",
+        "nofile=64:64",
         "--memory",
         str(getattr(settings, "code_sandbox_memory", "128m") or "128m"),
         "--memory-swap",
@@ -122,7 +137,7 @@ def _run_docker(config: CodeConfig, variables: dict[str, Any], settings: Any) ->
         str(int(getattr(settings, "code_sandbox_pids_limit", 64) or 64)),
         "--tmpfs",
         "/tmp:rw,noexec,nosuid,size=16m",
-        str(getattr(settings, "code_sandbox_image", "python:3.11-slim") or "python:3.11-slim"),
+        image,
         "python",
         "-I",
         "-B",
@@ -146,6 +161,12 @@ def _run_docker(config: CodeConfig, variables: dict[str, Any], settings: Any) ->
             check=False,
         )
         raise CodeExecutionError(f"代码沙箱执行超时（{timeout:.1f}s）") from exc
+    max_output = int(getattr(settings, "code_sandbox_max_output_bytes", 65536) or 65536)
+    output_size = len((completed.stdout or "").encode("utf-8")) + len(
+        (completed.stderr or "").encode("utf-8")
+    )
+    if output_size > max_output:
+        raise CodeExecutionError(f"代码沙箱输出超过上限：{output_size} > {max_output} bytes")
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "").strip()[:500]
         raise CodeExecutionError(f"代码沙箱执行失败: {detail}")

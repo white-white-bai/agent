@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -164,7 +165,45 @@ async def test_build_agent_tools_includes_knowledge_and_respects_depth():
     assert agent_tools.KNOWLEDGE_TOOL in names
     assert "delegate_sub.one" in names
     delegate = next(tool for tool in tools if tool.name == "delegate_sub.one")
-    assert await delegate.ainvoke({"query": "q"}) == "委派深度已达上限，请自行作答。"
+    result = json.loads(await delegate.ainvoke({"query": "q"}))
+    assert result["status"] == "error"
+    assert result["answer"] == "委派深度已达上限，请自行作答。"
+
+
+async def test_sub_agent_handoff_is_typed(monkeypatch):
+    spec = SimpleNamespace(
+        code="sub.one",
+        label="子 Agent",
+        system_prompt="sub",
+        provider="",
+        temperature=0.3,
+        max_tokens=None,
+        tools=[],
+        retriever={},
+        max_steps=3,
+    )
+    monkeypatch.setattr("agent_platform.engine.agents.registry.load_agent", lambda *args, **kwargs: spec)
+
+    async def fake_run_agent(*args, **kwargs):
+        return {"answer": "child-answer"}
+
+    monkeypatch.setattr("agent_platform.agentapp.runtime.run_agent", fake_run_agent)
+    tools, _ = await agent_tools.build_agent_tools(
+        AgentAppDef(name="parent", sub_agents=["sub.one"]),
+        Settings(agent_app_depth=2),
+        _ctx(FakeToolChatModel(responses=[AIMessage("x")])),
+        tenant_code="t",
+        thread_id="th",
+    )
+    delegate = next(tool for tool in tools if tool.name == "delegate_sub.one")
+
+    handoff = json.loads(await delegate.ainvoke({"query": "q"}))
+
+    assert handoff["from_agent"] == "parent"
+    assert handoff["to_agent"] == "sub.one"
+    assert handoff["status"] == "ok"
+    assert handoff["answer"] == "child-answer"
+    assert handoff["detail"] == {"depth": 1}
 
 
 async def test_build_agent_tools_discovers_mcp_tools(monkeypatch):

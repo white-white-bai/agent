@@ -72,6 +72,8 @@ class Settings(BaseSettings):
     code_sandbox_memory: str = "128m"
     code_sandbox_cpus: str = "0.5"
     code_sandbox_pids_limit: int = 64
+    code_sandbox_max_output_bytes: int = 65536
+    code_sandbox_allowed_images: str = ""
 
     # 不可信内容隔离：开启后对工具/知识/子 Agent 输出剥离指令注入并加边界标记
     prompt_guard_enabled: bool = False

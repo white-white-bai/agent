@@ -1,7 +1,7 @@
 """Agent 应用定义（自主 agent 的配置文档，对标 Dify「Agent 应用」）。"""
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -37,6 +37,16 @@ class AgentHitlConfig(BaseModel):
     prompt: str = "即将执行工具 {tool}，参数：{args}。是否批准？"
 
 
+class AgentHandoff(BaseModel):
+    """子 Agent 委派的结构化交接契约。"""
+
+    from_agent: str
+    to_agent: str
+    status: Literal["ok", "error"]
+    answer: str = ""
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+
 class AgentAppDef(BaseModel):
     """自主 agent 的完整定义：指令 + 模型 + 工具 + 知识 + 记忆 + 规划/反思 + 子 agent + HITL。"""
 
@@ -53,6 +63,9 @@ class AgentAppDef(BaseModel):
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     knowledge_as_tool: bool = True
     browser: bool = False
+    browser_allowed_hosts: str = ""
+    browser_allow_private: bool = False
+    browser_storage_state: str = ""
     memory: AgentMemoryConfig = Field(default_factory=AgentMemoryConfig)
     planning: bool = False
     reflection_rounds: int = 0
