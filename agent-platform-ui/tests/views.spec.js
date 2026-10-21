@@ -77,6 +77,14 @@ vi.mock('@/api', () => ({
   purgeUserMemories: vi.fn(async () => ({ deleted: 0 })),
   rebuildUserMemoryEmbeddings: vi.fn(async () => ({ updated: 0 })),
   metricsOverview: vi.fn(async () => ({})),
+  getAgentApp: vi.fn(async () => ({ status: 'draft', definition: {} })),
+  saveAgentAppDraft: vi.fn(async () => ({})),
+  publishAgentApp: vi.fn(async () => ({ version: 1 })),
+  listAgentAppVersions: vi.fn(async () => []),
+  rollbackAgentApp: vi.fn(async () => ({})),
+  runAgentStream: vi.fn(async () => ({})),
+  resumeAgent: vi.fn(async () => ({})),
+  clearAgentMemory: vi.fn(async () => ({ cleared: true })),
 }))
 
 import * as api from '@/api'
@@ -96,6 +104,7 @@ import ToolsView from '@/views/ToolsView.vue'
 import PromptsView from '@/views/PromptsView.vue'
 import MemoryView from '@/views/MemoryView.vue'
 import RunsView from '@/views/RunsView.vue'
+import AgentConfigView from '@/views/AgentConfigView.vue'
 
 const flush = () => flushPromises()
 
@@ -435,5 +444,21 @@ describe('RunsView', () => {
     expect(wrapper.text()).toContain('thread-1')
     expect(wrapper.text()).toContain('interrupted')
     expect(wrapper.text()).toContain('审批/恢复')
+  })
+})
+
+describe('AgentConfigView', () => {
+  it('loads the agent config and offers save/publish to writers', async () => {
+    api.getAgentApp.mockResolvedValueOnce({
+      status: 'draft',
+      definition: { name: '问答', instructions: 'hi', tools: [{ name: 'gov.lookup' }] },
+    })
+    const { wrapper } = await mountView(AgentConfigView, { path: '/apps/app-1/agent' })
+    expect(api.getAgentApp).toHaveBeenCalled()
+    expect(api.getApp).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('Agent 配置')
+    expect(wrapper.text()).toContain('保存草稿')
+    expect(wrapper.text()).toContain('发布')
+    expect(wrapper.text()).toContain('调试对话')
   })
 })

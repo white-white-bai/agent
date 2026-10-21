@@ -39,6 +39,7 @@ def _tool_spec(name: str, tenant_code: str) -> dict[str, Any] | None:
     return {
         "name": row.name,
         "label": row.label,
+        "description": row.description or "",
         "server": row.server,
         "kind": row.kind or "http",
         "http_method": row.http_method or "POST",

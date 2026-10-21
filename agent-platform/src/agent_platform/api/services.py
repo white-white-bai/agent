@@ -8,9 +8,12 @@ from typing import Any
 
 from sqlalchemy import func, select, update
 
+from agent_platform.agentapp.schema import AgentAppDef
 from agent_platform.core.db import session_scope
 from agent_platform.domain.models import (
     Agent,
+    AgentApp,
+    AgentAppVersion,
     App,
     Conversation,
     Graph,
@@ -677,6 +680,117 @@ def expire_stale_runs(timeout_seconds: int, tenant_code: str = "") -> int:
         return int(result.rowcount or 0)
 
 
+# --------------------------------------------------------------------------- Agent 应用（草稿 / 发布 / 回滚）
+
+def get_agent_app(app_uuid: str) -> AgentApp | None:
+    with session_scope() as session:
+        return session.scalar(select(AgentApp).where(AgentApp.app_uuid == app_uuid))
+
+
+def save_agent_draft(app_uuid: str, definition: dict[str, Any], tenant_code: str = "") -> AgentApp:
+    with session_scope() as session:
+        row = session.scalar(select(AgentApp).where(AgentApp.app_uuid == app_uuid))
+        if row is None:
+            row = AgentApp(uuid=_new_uuid(), tenant_code=tenant_code, app_uuid=app_uuid, status="draft")
+            session.add(row)
+            session.flush()
+        row.draft = definition
+        if row.published_version_id is None:
+            row.status = "draft"
+        session.flush()
+        return row
+
+
+def get_agent_draft(app_uuid: str) -> dict[str, Any] | None:
+    with session_scope() as session:
+        row = session.scalar(select(AgentApp).where(AgentApp.app_uuid == app_uuid))
+        if row is None:
+            return None
+        if row.draft:
+            return row.draft
+        if row.published_version_id is not None:
+            version = session.get(AgentAppVersion, row.published_version_id)
+            return version.definition if version is not None else None
+        return None
+
+
+def _next_agent_version(session: Any, agent_uuid: str) -> int:
+    current = session.scalar(
+        select(func.max(AgentAppVersion.version)).where(AgentAppVersion.agent_uuid == agent_uuid)
+    )
+    return int(current or 0) + 1
+
+
+def publish_agent_draft(
+    app_uuid: str, tenant_code: str = "", note: str = "", created_by: str = "", definition: dict[str, Any] | None = None
+) -> AgentAppVersion | None:
+    with session_scope() as session:
+        row = session.scalar(select(AgentApp).where(AgentApp.app_uuid == app_uuid))
+        if row is None:
+            row = AgentApp(uuid=_new_uuid(), tenant_code=tenant_code, app_uuid=app_uuid, status="draft")
+            session.add(row)
+            session.flush()
+        payload = definition if definition is not None else (row.draft or {})
+        if not payload:
+            return None
+        AgentAppDef.model_validate(payload)
+        version = AgentAppVersion(
+            uuid=_new_uuid(),
+            agent_uuid=row.uuid,
+            version=_next_agent_version(session, row.uuid),
+            definition=payload,
+            note=note,
+            created_by=created_by,
+        )
+        session.add(version)
+        session.flush()
+        row.status = "published"
+        row.published_version_id = version.id
+        row.draft = payload
+        return version
+
+
+def list_agent_versions(app_uuid: str) -> list[AgentAppVersion]:
+    with session_scope() as session:
+        row = session.scalar(select(AgentApp).where(AgentApp.app_uuid == app_uuid))
+        if row is None:
+            return []
+        return list(
+            session.scalars(
+                select(AgentAppVersion)
+                .where(AgentAppVersion.agent_uuid == row.uuid)
+                .order_by(AgentAppVersion.version.desc())
+            ).all()
+        )
+
+
+def rollback_agent(app_uuid: str, version: int) -> AgentAppVersion | None:
+    with session_scope() as session:
+        row = session.scalar(select(AgentApp).where(AgentApp.app_uuid == app_uuid))
+        if row is None:
+            return None
+        version_row = session.scalar(
+            select(AgentAppVersion).where(AgentAppVersion.agent_uuid == row.uuid, AgentAppVersion.version == version)
+        )
+        if version_row is None:
+            return None
+        row.published_version_id = version_row.id
+        row.draft = version_row.definition
+        row.status = "published"
+        return version_row
+
+
+def get_published_agent(app_uuid: str) -> AgentAppDef | None:
+    with session_scope() as session:
+        row = session.scalar(select(AgentApp).where(AgentApp.app_uuid == app_uuid))
+        if row is None or row.published_version_id is None:
+            return None
+        version = session.get(AgentAppVersion, row.published_version_id)
+        if version is None:
+            return None
+        return AgentAppDef.model_validate(version.definition)
+
+
 # --------------------------------------------------------------------------- 会话 / 消息
 
 def get_or_create_conversation(app: App, user_name: str, conversation_id: str = "") -> Conversation:
@@ -979,7 +1093,7 @@ def delete_mcp_server(server_uuid: str) -> bool:
 # --------------------------------------------------------------------------- 工具声明 / 智能体 / 提示词模板
 
 _TOOL_FIELDS = (
-    "label", "category", "server", "kind", "http_method", "http_path",
+    "label", "description", "category", "server", "kind", "http_method", "http_path",
     "params", "retry_attempts", "retry_backoff_seconds", "fallback",
 )
 _AGENT_FIELDS = (

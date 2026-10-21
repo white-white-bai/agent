@@ -11,7 +11,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent_platform.core.config import Settings
-from agent_platform.engine.context import LLMInvoker
+from agent_platform.engine.context import ChatModelBuilder, LLMInvoker
 
 
 def resolve_llm_model(settings: Settings, key: str) -> tuple[str, dict[str, Any]]:
@@ -82,3 +82,33 @@ def build_llm_invoker(settings: Settings) -> LLMInvoker:
         return content if isinstance(content, str) else str(content)
 
     return invoke
+
+
+def build_chat_model(
+    settings: Settings, provider: str, *, temperature: float = 0.3, max_tokens: int | None = None
+) -> Any:
+    """构建支持工具调用/多轮消息/流式的 ChatModel（供自主 agent 循环用）。
+
+    与 `build_llm_invoker`（system+user→str 的单轮协议）并存，互不影响。
+    """
+    from langchain_openai import ChatOpenAI
+
+    key, entry = resolve_llm_model(settings, provider)
+    model = entry.get("model") or ""
+    if not model:
+        raise RuntimeError(f"模型条目缺少 model 字段: {key}")
+    return ChatOpenAI(
+        model=model,
+        base_url=entry.get("base_url") or None,
+        api_key=entry.get("api_key") or "sk-placeholder",
+        temperature=temperature,
+        max_tokens=max_tokens,
+        streaming=True,
+    )
+
+
+def build_chat_model_builder(settings: Settings) -> ChatModelBuilder:
+    def build(*, provider: str, temperature: float, max_tokens: int | None) -> Any:
+        return build_chat_model(settings, provider, temperature=temperature, max_tokens=max_tokens)
+
+    return build

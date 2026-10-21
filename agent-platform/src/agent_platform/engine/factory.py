@@ -8,7 +8,7 @@ from agent_platform.core.config import Settings, get_settings
 from agent_platform.engine.agents.runner import build_agent_invoker
 from agent_platform.engine.context import EngineContext
 from agent_platform.knowledge.retrievers import build_retriever
-from agent_platform.models.factory import build_llm_invoker
+from agent_platform.models.factory import build_chat_model_builder, build_llm_invoker
 from agent_platform.tools.mcp_bridge import build_tool_invoker
 
 
@@ -24,6 +24,7 @@ def build_engine_context(
         retriever=build_retriever(settings),
         tools=build_tool_invoker(settings),
         agents=build_agent_invoker(settings),
+        chat_model=build_chat_model_builder(settings),
         tenant_code=tenant_code,
         tracer=tracer,
         subgraph_enabled=settings.subgraph_enabled,

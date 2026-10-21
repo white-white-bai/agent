@@ -84,6 +84,13 @@ export const GRAPH_PAGE = {
   meta: { title: '图编排', icon: 'Share', permission: 'graph:read', hidden: true },
 }
 
+export const AGENT_PAGE = {
+  path: '/apps/:appUuid/agent',
+  name: 'agent-app',
+  component: () => import('@/views/AgentConfigView.vue'),
+  meta: { title: 'Agent 配置', icon: 'MagicStick', permission: 'agent:read', hidden: true },
+}
+
 export const routes = [
   {
     path: '/login',
@@ -95,7 +102,7 @@ export const routes = [
     path: '/',
     component: AdminLayout,
     redirect: '/apps',
-    children: [...MENU_PAGES, GRAPH_PAGE],
+    children: [...MENU_PAGES, GRAPH_PAGE, AGENT_PAGE],
   },
   {
     path: '/403',

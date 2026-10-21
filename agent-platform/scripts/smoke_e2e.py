@@ -32,6 +32,22 @@ GRAPH_DEFINITION: dict[str, Any] = {
 }
 
 
+AGENT_APP_DEFINITION: dict[str, Any] = {
+    "name": "smoke-agent",
+    "instructions": "你是政务咨询助手，回答简洁。",
+    "provider": "",
+    "temperature": 0.3,
+    "tools": [],
+    "knowledge": {"retriever": "builtin", "dataset_ids": [], "top_k": 5},
+    "memory": {"window": 8},
+    "planning": False,
+    "reflection_rounds": 0,
+    "max_steps": 4,
+    "sub_agents": [],
+    "hitl": {"enabled": False, "policy": "off"},
+}
+
+
 class Report:
     def __init__(self) -> None:
         self.failures: list[str] = []
@@ -252,6 +268,38 @@ async def run_smoke(args: argparse.Namespace) -> int:
             nested.get("status") == "succeeded" and isinstance(nested.get("outputs"), dict),
             str(body)[:200],
         )
+
+        # ---- Agent 应用（自主 agent；需 AP_AGENT_APP_ENABLED=true） ----
+        agent_app_id = f"{args.app_id}-agent"
+        listing = (await get("/admin/apps", params={"tenant_code": tenant})).json()["data"]
+        agent_app = next((row for row in listing if row["app_id"] == agent_app_id), None)
+        if agent_app is None:
+            created = await post(
+                "/admin/apps",
+                json={"tenant_code": tenant, "app_id": agent_app_id, "app_name": "smoke-agent", "app_type": "agent"},
+            )
+            agent_app = created.json().get("data") or {}
+        agent_uuid = agent_app.get("uuid", "")
+        agent_key = agent_app.get("api_key", "")
+        if agent_uuid and agent_key:
+            await client.put(
+                f"/admin/apps/{agent_uuid}/agent/draft", json={"definition": AGENT_APP_DEFINITION}
+            )
+            published = await post(f"/admin/apps/{agent_uuid}/agent/publish", json={"note": "smoke"})
+            if published.status_code != 200:
+                report.skip("Agent 应用 /v1/chat-messages", f"发布失败 status={published.status_code}")
+            else:
+                response = await post(
+                    "/v1/chat-messages", json={"query": query, "user": "smoke"}, headers={"Api-Key": agent_key}
+                )
+                events = parse_sse(response.text) if response.status_code == 200 else []
+                end = _event(events, "message_end")
+                if response.status_code == 200 and end is not None and end.get("answer"):
+                    report.ok("Agent 应用 /v1/chat-messages", f"answer={str(end.get('answer'))[:40]}")
+                else:
+                    report.skip("Agent 应用 /v1/chat-messages", "AP_AGENT_APP_ENABLED 未开启或模型不可用")
+        else:
+            report.skip("Agent 应用 /v1/chat-messages", "无法创建/复用 agent 应用")
 
     print()
     if report.skips:
