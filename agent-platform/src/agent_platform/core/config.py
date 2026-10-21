@@ -83,6 +83,11 @@ class Settings(BaseSettings):
     # 不可信内容隔离：开启后对工具/知识/子 Agent 输出剥离指令注入并加边界标记
     prompt_guard_enabled: bool = False
     prompt_guard_max_chars: int = 12000
+    # 语义级注入检测（在规则式清洗后额外调用一次模型判定，默认关闭）
+    prompt_guard_llm_enabled: bool = False
+    prompt_guard_llm_provider: str = ""
+    prompt_guard_llm_threshold: float = 0.8
+    prompt_guard_llm_max_chars: int = 4000
 
     # HITL 外部通知：中断时 POST Webhook；留空关闭
     hitl_webhook_url: str = ""

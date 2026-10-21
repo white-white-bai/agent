@@ -13,7 +13,7 @@ from pydantic import Field, create_model
 
 from agent_platform.agentapp.schema import AgentAppDef, AgentHandoff, AgentToolRef
 from agent_platform.core.config import Settings
-from agent_platform.core.prompt_guard import sanitize_untrusted
+from agent_platform.core.prompt_guard import sanitize_untrusted, semantic_guard
 from agent_platform.engine.context import EngineContext
 from agent_platform.graph.schema import KnowledgeConfig
 from agent_platform.tools.mcp_bridge import _server_spec, _tool_spec, call_declared_tool
@@ -59,6 +59,24 @@ def _guard(settings: Settings, value: Any, source: str) -> Any:
         value,
         source=source,
         max_chars=int(getattr(settings, "prompt_guard_max_chars", 12000) or 12000),
+    )
+
+
+async def _guard_llm(
+    settings: Settings, ctx: EngineContext | None, value: Any, source: str, provider: str = ""
+) -> Any:
+    """规则清洗；开启语义检测时再调用一次模型判定，高风险内容直接拦截。"""
+    if not getattr(settings, "prompt_guard_enabled", False):
+        return value
+    if ctx is None or not getattr(settings, "prompt_guard_llm_enabled", False):
+        return _guard(settings, value, source)
+    return await semantic_guard(
+        value,
+        llm=ctx.llm,
+        provider=provider or getattr(settings, "prompt_guard_llm_provider", ""),
+        source=source,
+        max_chars=int(getattr(settings, "prompt_guard_llm_max_chars", 4000) or 4000),
+        threshold=float(getattr(settings, "prompt_guard_llm_threshold", 0.8) or 0.8),
     )
 
 
@@ -116,7 +134,9 @@ def _schema_model(tool_name: str, schema: dict[str, Any] | None) -> type:
     return create_model(f"{tool_name}_args", **fields)
 
 
-def _declared_tool(ref: AgentToolRef, settings: Settings, tenant_code: str) -> StructuredTool:
+def _declared_tool(
+    ref: AgentToolRef, settings: Settings, tenant_code: str, ctx: EngineContext | None = None, provider: str = ""
+) -> StructuredTool:
     spec = _tool_spec(ref.name, tenant_code) or {}
     params = list(spec.get("params") or [])
     description = str(spec.get("description") or spec.get("label") or ref.name)
@@ -125,7 +145,7 @@ def _declared_tool(ref: AgentToolRef, settings: Settings, tenant_code: str) -> S
     async def _run(**kwargs: Any) -> Any:
         args = {key: value for key, value in kwargs.items() if value is not None}
         result = await call_declared_tool(settings, ref.name, args, server=server, tenant_code=tenant_code)
-        return _guard(settings, result, ref.name)
+        return await _guard_llm(settings, ctx, result, ref.name, provider)
 
     return StructuredTool.from_function(
         coroutine=_run,
@@ -139,6 +159,7 @@ def _knowledge_tool(
     agent_def: AgentAppDef, settings: Settings, ctx: EngineContext, tenant_code: str, sink: list[dict]
 ) -> StructuredTool:
     config: KnowledgeConfig = agent_def.knowledge
+    provider = agent_def.provider
 
     async def _run(query: str) -> str:
         chunks = await ctx.retriever(config, query, tenant_code)
@@ -150,11 +171,11 @@ def _knowledge_tool(
                 known.add(key)
                 sink.append(item)
         if not hits:
-            return _guard(settings, "（未检索到资料）", KNOWLEDGE_TOOL)
+            return await _guard_llm(settings, ctx, "（未检索到资料）", KNOWLEDGE_TOOL, provider)
         text = "\n\n".join(
             f"[{index + 1}] {item.get('content', '')}" for index, item in enumerate(hits)
         )
-        return _guard(settings, text, KNOWLEDGE_TOOL)
+        return await _guard_llm(settings, ctx, text, KNOWLEDGE_TOOL, provider)
 
     return StructuredTool.from_function(
         coroutine=_run,
@@ -193,7 +214,9 @@ def _sub_agent_tool(code: str, agent_def: AgentAppDef, settings: Settings, ctx: 
                 answer=f"子 Agent 执行失败: {exc}",
                 detail={"depth": depth},
             ).model_dump_json()
-        answer = _guard(settings, str(result.get("answer") or ""), f"{DELEGATE_PREFIX}{code}")
+        answer = await _guard_llm(
+            settings, ctx, str(result.get("answer") or ""), f"{DELEGATE_PREFIX}{code}", agent_def.provider
+        )
         return AgentHandoff(
             from_agent=agent_def.name,
             to_agent=code,
@@ -234,6 +257,9 @@ async def _append_mcp_tools(
     tenant_code: str,
     tools: list[StructuredTool],
     allowlist: set[str] | None = None,
+    *,
+    ctx: EngineContext,
+    provider: str = "",
 ) -> None:
     """从 MCP Server 动态发现工具（tools/list），失败只记日志、不阻断 agent。"""
     spec = _server_spec(settings, server_name, tenant_code)
@@ -267,7 +293,7 @@ async def _append_mcp_tools(
                 settings, tenant_code=tenant_code, tool_name=_name, server=server_name, args=args
             ):
                 result = await client.call_tool(_name, args)
-            return _guard(settings, result, _name)
+            return await _guard_llm(settings, ctx, result, _name, provider)
 
         tools.append(
             StructuredTool.from_function(
@@ -294,7 +320,7 @@ async def build_agent_tools(
     """
     tools: list[StructuredTool] = []
     for ref in agent_def.tools:
-        tools.append(_declared_tool(ref, settings, tenant_code))
+        tools.append(_declared_tool(ref, settings, tenant_code, ctx, agent_def.provider))
     sink: list[dict] = []
     if agent_def.knowledge_as_tool and agent_def.knowledge.dataset_ids:
         tools.append(_knowledge_tool(agent_def, settings, ctx, tenant_code, sink))
@@ -317,5 +343,7 @@ async def build_agent_tools(
             tenant_code,
             tools,
             allowlist=set(agent_def.mcp_tool_allowlist or []),
+            ctx=ctx,
+            provider=agent_def.provider,
         )
     return tools, sink
