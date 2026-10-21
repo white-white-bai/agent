@@ -44,6 +44,7 @@ describe('api endpoint map', () => {
     ['deleteSensitiveWord', () => api.deleteSensitiveWord(3), '/admin/sensitive-words/3', { method: 'DELETE' }],
     ['getGuardConfig', () => api.getGuardConfig(), '/admin/guard/config', undefined],
     ['listMcpServers', () => api.listMcpServers({ tenant_code: 't' }), '/admin/mcp-servers', { params: { tenant_code: 't' } }],
+    ['listToolAudits', () => api.listToolAudits({ tool_name: 'echo' }), '/admin/tool-audits', { params: { tool_name: 'echo' } }],
     ['createMcpServer', () => api.createMcpServer({ name: 's' }), '/admin/mcp-servers', { method: 'POST', body: { name: 's' } }],
     ['deleteMcpServer', () => api.deleteMcpServer('u'), '/admin/mcp-servers/u', { method: 'DELETE' }],
     ['listDatasets', () => api.listDatasets({ tenant_code: 't' }), '/admin/datasets', { params: { tenant_code: 't' } }],

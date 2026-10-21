@@ -28,6 +28,12 @@ export const MENU_PAGES = [
     meta: { title: '工具声明', icon: 'SetUp', permission: 'tool:read' },
   },
   {
+    path: '/tool-audits',
+    name: 'tool-audits',
+    component: () => import('@/views/ToolAuditsView.vue'),
+    meta: { title: '工具审计', icon: 'Tickets', permission: 'tool:read' },
+  },
+  {
     path: '/prompts',
     name: 'prompts',
     component: () => import('@/views/PromptsView.vue'),

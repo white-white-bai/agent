@@ -15,6 +15,7 @@ agent 中台的独立管理端。Vue 3 + Vite + Element Plus + Pinia + vue-route
 | `/providers` | `ProvidersView` | 大模型 / 检索 / 向量 / 观测 provider 配置（含检索流水线只读回显） |
 | `/agents` | `AgentsView` | 智能体定义（角色 / 8 种工作模式 / 工具 / 提示词 / CoT） |
 | `/tools` | `ToolsView` | 生产级工具声明（参数 schema / 重试 / 兜底）与试调 |
+| `/tool-audits` | `ToolAuditsView` | 工具调用审计：租户/工具/状态筛选，参数、错误与耗时 |
 | `/prompts` | `PromptsView` | 少样本提示词模板（system 骨架 + 示例 + CoT 提示） |
 | `/mcp` | `McpServersView` | 工具（MCP server）配置 |
 | `/knowledge` | `KnowledgeView` | 知识库：创建向导（选数据源→分段与清洗含预览→处理完成）、知识库列表（建/改/删）、文档管理（上传/进度/批量/重传/状态轮询/每文档覆盖分段）、分段查看编辑、召回测试 |

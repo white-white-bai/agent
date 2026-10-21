@@ -98,6 +98,7 @@ export const createTool = (body) => request('/admin/tools', { method: 'POST', bo
 export const updateTool = (uuid, body) => request(`/admin/tools/${uuid}`, { method: 'PUT', body })
 export const deleteTool = (uuid) => request(`/admin/tools/${uuid}`, { method: 'DELETE' })
 export const testTool = (uuid, body) => request(`/admin/tools/${uuid}/test`, { method: 'POST', body })
+export const listToolAudits = (params) => request('/admin/tool-audits', { params })
 
 // 提示词模板
 export const listPrompts = (params) => request('/admin/prompts', { params })

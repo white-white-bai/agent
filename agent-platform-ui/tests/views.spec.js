@@ -52,6 +52,7 @@ vi.mock('@/api', () => ({
   updateAgent: vi.fn(async () => ({})),
   deleteAgent: vi.fn(async () => ({})),
   listTools: vi.fn(async () => []),
+  listToolAudits: vi.fn(async () => ({ items: [], total: 0 })),
   createTool: vi.fn(async () => ({})),
   updateTool: vi.fn(async () => ({})),
   deleteTool: vi.fn(async () => ({})),
