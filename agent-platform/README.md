@@ -210,7 +210,7 @@ start → 意图识别 → 知识检索 → 内容生成 → 合规质检 → �
 - **工具**：`ap_tool` 声明按 name 引用，`params`（`{name,type,required,enum,description}`）转成 function-calling 的 JSON Schema；执行统一走 `call_declared_tool`（复用参数校验 / 重试 / 兜底）。知识库可暴露为 `knowledge_search` 工具；`sub_agents` 把子智能体暴露为 `delegate_<code>` 工具（`AP_AGENT_APP_DEPTH` 限制递归深度），返回结构化 `AgentHandoff` JSON（`from_agent` / `to_agent` / `status` / `answer` / `detail`）；`mcp_servers` 会调 `tools/list` **动态发现** MCP 工具（`inputSchema` 自动转参模型，发现失败降级不阻断）。
 - **记忆**：自研 `MySQLCheckpointSaver` 按 `thread_id = conversation_id` **跨轮持久** agent 消息；`memory.window` 控制送模型的裁剪条数，`memory.max_chars` 是上下文字符预算（0 不限），`memory.summary_enabled` 可显式关闭全局历史摘要注入。
 - **Human-in-the-loop**：`hitl.policy` = `off`（默认）/ `before_all_tools` / `before_listed`。命中策略的工具调用前 `interrupt` 暂停本轮，对外 SSE 仍以**正常的 `message_end`**返回审批提示（不引入未知事件，兼容链路安全）；管理端 `POST /admin/apps/{uuid}/agent/resume` 以 `Command(resume=...)` 批准/拒绝续跑。会话存在待审批中断时，新一轮不静默续跑。
-- **外部审批通知**：配置 `AP_HITL_WEBHOOK_URL` 后，图运行与 Agent 应用中断时向 Webhook POST `{event, payload}`（含 `thread_id` / `app_uuid` / `resume_endpoint` / 中断载荷）；`AP_HITL_WEBHOOK_SECRET` 作为 `X-Webhook-Secret` 发送。通知失败按 `AP_HITL_WEBHOOK_ATTEMPTS` 重试，最终失败只记日志，不阻断审批和 SSE。
+- **外部审批通知**：配置 `AP_HITL_WEBHOOK_URL` 后，图运行与 Agent 应用中断时向 Webhook POST `{event, payload}`（含 `thread_id` / `app_uuid` / `resume_endpoint` / 中断载荷）；`AP_HITL_WEBHOOK_SECRET` 作为 `X-Webhook-Secret` 发送。另支持 `AP_HITL_SLACK_WEBHOOK_URL`（text）与 `AP_HITL_TEAMS_WEBHOOK_URL`（MessageCard）专用格式。通知失败按 `AP_HITL_WEBHOOK_ATTEMPTS` 重试，最终失败只记日志，不阻断审批和 SSE。
 - **不可信内容隔离**：开启 `AP_PROMPT_GUARD_ENABLED=true` 后，声明式工具、MCP 动态工具、知识检索、子 Agent 返回文本，以及图内 agent 模式的工具观察，都会先脱敏邮箱/手机号/API key、剥离常见指令注入，再用 `<untrusted_data>` 边界包裹后送入模型；`AP_PROMPT_GUARD_MAX_CHARS` 控制截断长度。默认关闭，避免改变既有输出。
 - **浏览器操作（可选）**：Agent 定义里 `browser=true` 且 `AP_BROWSER_ENABLED=true` 时，装配 `browser_open` / `browser_click` / `browser_fill` / `browser_press` / `browser_text` / `browser_screenshot` / `browser_download` / `browser_upload` / `browser_new_tab` / `browser_tabs` / `browser_switch_tab` / `browser_close_tab` 工具。需要先 `pip install -e ".[browser]"` 并 `playwright install chromium`；同一 `thread_id` 复用页面，运行结束自动关闭。`AP_BROWSER_STORAGE_STATE` 可持久化登录态（cookie/localStorage，注意文件权限），`AP_BROWSER_DOWNLOAD_DIR` / `AP_BROWSER_UPLOAD_DIR` 分别限制下载与可上传目录。URL 只允许 http/https，默认拦截 localhost/私网/链路本地 IP；生产建议配置 `AP_BROWSER_ALLOWED_HOSTS` 白名单，必要时才开 `AP_BROWSER_ALLOW_PRIVATE`。
 - **入口**：`/v1/chat-messages`（含 transfer 链路）按 `app_type` 分叉到 `stream_agent`，产出与图一致的 `token` / `final` 事件；`runWorkflow` / `/v1/workflows/run` 同步分叉。
@@ -278,8 +278,10 @@ python scripts/record_agent_trace.py \
 
 生产建议 `AP_CODE_SANDBOX_MODE=docker`：每次运行启动一次性容器，`--network none`、只读根文件系统、非 root、
 `--cap-drop ALL`、`no-new-privileges`，并限制 `--memory` / `--cpus` / `--pids-limit`；超时会 `docker rm -f` 清理。
-镜像、CPU/内存/PID 和超时分别由 `AP_CODE_SANDBOX_IMAGE` / `AP_CODE_SANDBOX_CPUS` / `AP_CODE_SANDBOX_MEMORY` /
-`AP_CODE_SANDBOX_PIDS_LIMIT` / `AP_CODE_SANDBOX_TIMEOUT_SECONDS` 控制。Docker 不可用时该模式**失败关闭**，不会静默回退到进程内执行。
+镜像、CPU/内存/PID、输出上限和镜像白名单分别由 `AP_CODE_SANDBOX_IMAGE` / `AP_CODE_SANDBOX_CPUS` / `AP_CODE_SANDBOX_MEMORY` /
+`AP_CODE_SANDBOX_PIDS_LIMIT` / `AP_CODE_SANDBOX_MAX_OUTPUT_BYTES` / `AP_CODE_SANDBOX_ALLOWED_IMAGES` 控制。
+需要 gVisor 时配置 `AP_CODE_SANDBOX_RUNTIME=runsc`；自定义 seccomp 用 `AP_CODE_SANDBOX_SECCOMP_PROFILE`。
+Docker 不可用时该模式**失败关闭**，不会静默回退到进程内执行。
 
 ## 链路追踪（Langfuse）
 

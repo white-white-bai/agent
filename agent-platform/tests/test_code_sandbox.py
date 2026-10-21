@@ -49,7 +49,14 @@ def test_docker_mode_builds_isolated_command(monkeypatch):
         calls.append((command, kwargs))
         return subprocess.CompletedProcess(command, 0, stdout=json.dumps({"doubled": 42, "extra": "x"}), stderr="")
 
-    monkeypatch.setattr(code_sandbox, "get_settings", lambda: _settings())
+    monkeypatch.setattr(
+        code_sandbox,
+        "get_settings",
+        lambda: _settings(
+            code_sandbox_runtime="runsc",
+            code_sandbox_seccomp_profile="/etc/seccomp.json",
+        ),
+    )
     monkeypatch.setattr(code_sandbox.shutil, "which", lambda name: "/usr/bin/docker")
     monkeypatch.setattr(code_sandbox.subprocess, "run", fake_run)
 
@@ -60,6 +67,8 @@ def test_docker_mode_builds_isolated_command(monkeypatch):
     assert "--read-only" in command
     assert command[command.index("--user") + 1] == "65534:65534"
     assert "--cap-drop" in command and "ALL" in command
+    assert command[command.index("--runtime") + 1] == "runsc"
+    assert "seccomp=/etc/seccomp.json" in command
     assert command[command.index("--memory") + 1] == "128m"
     assert command[command.index("--pids-limit") + 1] == "64"
     assert kwargs["timeout"] == 1.0

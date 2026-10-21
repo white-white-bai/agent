@@ -120,30 +120,40 @@ def _run_docker(config: CodeConfig, variables: dict[str, Any], settings: Any) ->
         "ALL",
         "--security-opt",
         "no-new-privileges",
-        "--ipc",
-        "none",
-        "--init",
-        "--stop-timeout",
-        "1",
-        "--ulimit",
-        "nofile=64:64",
-        "--memory",
-        str(getattr(settings, "code_sandbox_memory", "128m") or "128m"),
-        "--memory-swap",
-        str(getattr(settings, "code_sandbox_memory", "128m") or "128m"),
-        "--cpus",
-        str(getattr(settings, "code_sandbox_cpus", "0.5") or "0.5"),
-        "--pids-limit",
-        str(int(getattr(settings, "code_sandbox_pids_limit", 64) or 64)),
-        "--tmpfs",
-        "/tmp:rw,noexec,nosuid,size=16m",
-        image,
-        "python",
-        "-I",
-        "-B",
-        "-c",
-        _DOCKER_RUNNER,
     ]
+    runtime = str(getattr(settings, "code_sandbox_runtime", "") or "")
+    if runtime:
+        command.extend(["--runtime", runtime])
+    seccomp = str(getattr(settings, "code_sandbox_seccomp_profile", "") or "")
+    if seccomp:
+        command.extend(["--security-opt", f"seccomp={seccomp}"])
+    command.extend(
+        [
+            "--ipc",
+            "none",
+            "--init",
+            "--stop-timeout",
+            "1",
+            "--ulimit",
+            "nofile=64:64",
+            "--memory",
+            str(getattr(settings, "code_sandbox_memory", "128m") or "128m"),
+            "--memory-swap",
+            str(getattr(settings, "code_sandbox_memory", "128m") or "128m"),
+            "--cpus",
+            str(getattr(settings, "code_sandbox_cpus", "0.5") or "0.5"),
+            "--pids-limit",
+            str(int(getattr(settings, "code_sandbox_pids_limit", 64) or 64)),
+            "--tmpfs",
+            "/tmp:rw,noexec,nosuid,size=16m",
+            image,
+            "python",
+            "-I",
+            "-B",
+            "-c",
+            _DOCKER_RUNNER,
+        ]
+    )
     try:
         completed = subprocess.run(
             command,

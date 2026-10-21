@@ -75,6 +75,8 @@ class Settings(BaseSettings):
     code_sandbox_pids_limit: int = 64
     code_sandbox_max_output_bytes: int = 65536
     code_sandbox_allowed_images: str = ""
+    code_sandbox_runtime: str = ""
+    code_sandbox_seccomp_profile: str = ""
 
     # 不可信内容隔离：开启后对工具/知识/子 Agent 输出剥离指令注入并加边界标记
     prompt_guard_enabled: bool = False
@@ -84,6 +86,8 @@ class Settings(BaseSettings):
     hitl_webhook_url: str = ""
     hitl_webhook_secret: str = ""
     hitl_webhook_timeout_seconds: float = 3.0
+    hitl_slack_webhook_url: str = ""
+    hitl_teams_webhook_url: str = ""
     hitl_webhook_attempts: int = 2
     hitl_webhook_backoff_seconds: float = 0.2
     hitl_outbox_enabled: bool = False
