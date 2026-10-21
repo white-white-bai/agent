@@ -427,10 +427,10 @@ python -m agent_platform.worker.main
 - 召回：只查 `ap_user_memory`（**不写知识库 dataset / 不污染 `retriever_resources`**），复用内置向量/全文/混合检索，
   命中写入 `inputs.user_memory`（结构化）与 `inputs.user_memory_text`（文本）；autonomous 模式自动把后者注入 system 消息，
   其它模式可在提示词里写 `{{ user_memory_text }}`。
-- 管理端：`GET /admin/user-memories`、`GET /admin/user-memories/users`、`POST|PUT|DELETE /admin/user-memories*`、
-  `POST /admin/user-memories/recall`、`POST /admin/user-memories/purge`、
+- 管理端：`GET /admin/user-memories`、`GET /admin/user-memories/users`、`GET /admin/user-memories/aggregate`、
+  `POST|PUT|DELETE /admin/user-memories*`、`POST /admin/user-memories/recall`、`POST /admin/user-memories/purge`、
   `POST /admin/user-memories/rebuild-embeddings`、`GET /admin/memory/config`；
-  前端「用户记忆」页支持筛选、增删改、召回测试、按用户物理清除与按当前模型重建向量。
+  前端「用户记忆」页支持筛选、增删改、召回测试、按用户物理清除、按当前模型重建向量，以及按用户跨应用汇总。
 - 隐私：`request.user` 目前是客户端自报，生产必须由网关注入可信 user 并开启管理端鉴权；`purge` 会物理删除
   记忆与水位线；召回按当前 `AP_EMBEDDING_MODEL` / `AP_EMBEDDING_DIM` 过滤失效向量，修改模型或维度后
   用 `rebuild-embeddings` 重建（可限定 `user_key` / `app_uuid`）。

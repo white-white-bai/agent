@@ -101,6 +101,36 @@ def list_memory_users(tenant_code: str, *, app_uuid: str = "", limit: int = 100)
         ]
 
 
+def aggregate_memories_by_app(tenant_code: str, user_key: str) -> list[dict[str, Any]]:
+    """按应用聚合某用户的记忆，用于跨应用汇总。"""
+    with session_scope() as session:
+        stmt = (
+            select(
+                UserMemory.app_uuid,
+                func.count(UserMemory.id),
+                func.max(UserMemory.updated_at),
+                func.sum(UserMemory.hit_count),
+            )
+            .where(
+                UserMemory.tenant_code == tenant_code,
+                UserMemory.user_key == normalize_user_key(user_key),
+                UserMemory.is_deleted == 0,
+            )
+            .group_by(UserMemory.app_uuid)
+            .order_by(func.max(UserMemory.updated_at).desc())
+        )
+        rows = session.execute(stmt).all()
+        return [
+            {
+                "app_uuid": app_uuid or "",
+                "count": int(count or 0),
+                "last_updated": last_updated.isoformat() if last_updated else "",
+                "hits": int(hits or 0),
+            }
+            for app_uuid, count, last_updated, hits in rows
+        ]
+
+
 def get_memory(memory_uuid: str, tenant_code: str = "") -> UserMemory | None:
     with session_scope() as session:
         row = session.scalar(

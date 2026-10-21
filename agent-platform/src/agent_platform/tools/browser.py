@@ -82,6 +82,7 @@ class BrowserSession:
         self._browser: Any = None
         self._context: Any = None
         self._page: Any = None
+        self._pages: list[Any] = []
 
     async def start(self) -> None:
         if self._page is not None:
@@ -99,6 +100,7 @@ class BrowserSession:
             self._context = await self._browser.new_context(**context_kwargs)
             self._page = await self._context.new_page()
             self._page.set_default_timeout(int(getattr(self.settings, "browser_timeout_ms", 15000) or 15000))
+            self._pages = [self._page]
         except BrowserError:
             raise
         except Exception as exc:
@@ -122,6 +124,7 @@ class BrowserSession:
                 except Exception:
                     logger.debug("关闭浏览器资源失败：%s", name, exc_info=True)
         self._page = None
+        self._pages = []
 
     async def page(self) -> Any:
         await self.start()
@@ -180,6 +183,45 @@ class BrowserSession:
         path = directory / name
         await download.save_as(str(path))
         return str(path)
+
+    async def new_tab(self, url: str = "") -> str:
+        context = self._context
+        if context is None:
+            await self.start()
+            context = self._context
+        page = await context.new_page()
+        page.set_default_timeout(int(getattr(self.settings, "browser_timeout_ms", 15000) or 15000))
+        self._pages.append(page)
+        self._page = page
+        if url:
+            await page.goto(validate_url(url, self.settings), wait_until="domcontentloaded")
+        return await self.snapshot()
+
+    async def tabs(self) -> list[dict[str, Any]]:
+        return [
+            {"index": index, "url": getattr(page, "url", ""), "active": page is self._page}
+            for index, page in enumerate(self._pages)
+        ]
+
+    async def switch_tab(self, index: int) -> str:
+        if index < 0 or index >= len(self._pages):
+            raise BrowserError(f"标签页不存在：{index}")
+        self._page = self._pages[index]
+        return await self.snapshot()
+
+    async def close_tab(self, index: int | None = None) -> str:
+        if not self._pages:
+            return "（无标签页）"
+        selected = len(self._pages) - 1 if index is None else index
+        if selected < 0 or selected >= len(self._pages):
+            raise BrowserError(f"标签页不存在：{selected}")
+        page = self._pages.pop(selected)
+        await page.close()
+        if not self._pages:
+            self._page = None
+            return "（无标签页）"
+        self._page = self._pages[min(selected, len(self._pages) - 1)]
+        return await self.snapshot()
 
 
 _SESSIONS: dict[str, BrowserSession] = {}
@@ -244,6 +286,22 @@ def build_browser_tools(
         session = await get_session(thread_id, settings)
         return _wrap(await session.download(selector), "browser_download")
 
+    async def _new_tab(url: str = "") -> Any:
+        session = await get_session(thread_id, settings)
+        return _wrap(await session.new_tab(url), "browser_new_tab")
+
+    async def _tabs() -> Any:
+        session = await get_session(thread_id, settings)
+        return _wrap(await session.tabs(), "browser_tabs")
+
+    async def _switch_tab(index: int) -> Any:
+        session = await get_session(thread_id, settings)
+        return _wrap(await session.switch_tab(index), "browser_switch_tab")
+
+    async def _close_tab(index: int | None = None) -> Any:
+        session = await get_session(thread_id, settings)
+        return _wrap(await session.close_tab(index), "browser_close_tab")
+
     return [
         StructuredTool.from_function(
             coroutine=_open,
@@ -293,6 +351,36 @@ def build_browser_tools(
             description="点击 selector 触发下载并返回保存路径（适合 CSV 等附件）。",
             args_schema=create_model(
                 "browser_download_args", selector=(str, Field(..., description="触发下载的 CSS selector"))
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=_new_tab,
+            name="browser_new_tab",
+            description="新建标签页（可选打开 URL）并切换过去，返回页面文本。",
+            args_schema=create_model(
+                "browser_new_tab_args", url=(str, Field(default="", description="可选 URL"))
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=_tabs,
+            name="browser_tabs",
+            description="列出当前浏览器标签页及 active 状态。",
+        ),
+        StructuredTool.from_function(
+            coroutine=_switch_tab,
+            name="browser_switch_tab",
+            description="切换到指定标签页，返回页面文本。",
+            args_schema=create_model(
+                "browser_switch_tab_args", index=(int, Field(..., description="标签页索引"))
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=_close_tab,
+            name="browser_close_tab",
+            description="关闭指定标签页（缺省关闭当前页），返回剩余活动页面文本。",
+            args_schema=create_model(
+                "browser_close_tab_args",
+                index=(int | None, Field(default=None, description="可选标签页索引")),
             ),
         ),
     ]

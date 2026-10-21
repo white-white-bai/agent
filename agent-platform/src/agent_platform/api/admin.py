@@ -963,6 +963,24 @@ def list_user_memories(
     return {"data": {"items": [_memory_dict(row) for row in rows], "total": total, "page": page, "size": size}}
 
 
+@router.get("/user-memories/aggregate", dependencies=[Depends(require_permission("memory:read"))])
+def aggregate_user_memories(
+    tenant_code: str = "",
+    user_key: str = "",
+    principal: AdminPrincipal = Depends(get_current_admin),
+) -> dict[str, Any]:
+    if not user_key.strip():
+        raise HTTPException(status_code=400, detail="user_key 不能为空")
+    apps = memory_store.aggregate_memories_by_app(_tenant(principal, tenant_code), user_key)
+    return {
+        "data": {
+            "user_key": memory_store.normalize_user_key(user_key),
+            "apps": apps,
+            "total": sum(int(item["count"]) for item in apps),
+        }
+    }
+
+
 @router.get("/user-memories/users", dependencies=[Depends(require_permission("memory:read"))])
 def list_user_memory_users(
     tenant_code: str = "",

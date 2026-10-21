@@ -116,6 +116,7 @@ export const getRetrievalConfig = () => request('/admin/retrieval/config')
 // 用户级长期记忆
 export const getMemoryConfig = () => request('/admin/memory/config')
 export const listUserMemories = (params) => request('/admin/user-memories', { params })
+export const aggregateUserMemories = (params) => request('/admin/user-memories/aggregate', { params })
 export const listMemoryUsers = (params) => request('/admin/user-memories/users', { params })
 export const createUserMemory = (body) => request('/admin/user-memories', { method: 'POST', body })
 export const updateUserMemory = (uuid, body) => request(`/admin/user-memories/${uuid}`, { method: 'PUT', body })

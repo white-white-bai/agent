@@ -67,6 +67,7 @@ describe('api endpoint map', () => {
     ['cancelRun', () => api.cancelRun('t1'), '/admin/runs/t1/cancel', { method: 'POST' }],
     ['getMemoryConfig', () => api.getMemoryConfig(), '/admin/memory/config', undefined],
     ['listUserMemories', () => api.listUserMemories({ user_key: 'u' }), '/admin/user-memories', { params: { user_key: 'u' } }],
+    ['aggregateUserMemories', () => api.aggregateUserMemories({ user_key: 'u' }), '/admin/user-memories/aggregate', { params: { user_key: 'u' } }],
     ['listMemoryUsers', () => api.listMemoryUsers({ tenant_code: 't' }), '/admin/user-memories/users', { params: { tenant_code: 't' } }],
     ['createUserMemory', () => api.createUserMemory({ content: 'c' }), '/admin/user-memories', { method: 'POST', body: { content: 'c' } }],
     ['updateUserMemory', () => api.updateUserMemory('m1', { content: 'c' }), '/admin/user-memories/m1', { method: 'PUT', body: { content: 'c' } }],

@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import {
+  aggregateUserMemories,
   createUserMemory,
   deleteUserMemory,
   getMemoryConfig,
@@ -42,6 +43,11 @@ const recallVisible = ref(false)
 const recallForm = reactive({ user_key: '', app_uuid: '', query: '', top_k: 5 })
 const recallHits = ref([])
 const recalling = ref(false)
+
+const aggregateVisible = ref(false)
+const aggregateUser = ref('')
+const aggregateApps = ref([])
+const aggregateTotal = ref(0)
 
 const KINDS = ['fact', 'preference', 'episode']
 
@@ -164,6 +170,23 @@ async function rebuildEmbeddings() {
   }
 }
 
+async function openAggregate() {
+  const userKey = filters.user_key.trim()
+  if (!userKey) {
+    ElMessage.warning('请先填写用户标识')
+    return
+  }
+  try {
+    const result = await aggregateUserMemories({ tenant_code: filters.tenant_code, user_key: userKey })
+    aggregateUser.value = (result && result.user_key) || userKey
+    aggregateApps.value = (result && result.apps) || []
+    aggregateTotal.value = (result && result.total) || 0
+    aggregateVisible.value = true
+  } catch (error) {
+    ElMessage.error(error.message || '汇总失败')
+  }
+}
+
 function openRecall(row) {
   recallForm.user_key = row ? row.user_key : filters.user_key
   recallForm.app_uuid = row ? row.app_uuid : ''
@@ -213,6 +236,7 @@ onMounted(loadMeta)
       <el-input v-model="filters.user_key" placeholder="用户标识" class="toolbar__input" @keyup.enter="refresh" />
       <el-input v-model="filters.q" placeholder="内容关键词" class="toolbar__input" @keyup.enter="refresh" />
       <el-button @click="refresh">查询</el-button>
+      <el-button @click="openAggregate">跨应用汇总</el-button>
       <el-button v-if="auth.can('memory:write')" type="primary" @click="openCreate">新增记忆</el-button>
       <el-button v-if="auth.can('memory:write')" type="danger" plain @click="purge">按用户清除</el-button>
       <el-button v-if="auth.can('memory:write')" @click="rebuildEmbeddings">重建向量</el-button>
@@ -289,6 +313,19 @@ onMounted(loadMeta)
       </el-table>
       <template #footer>
         <el-button @click="recallVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="aggregateVisible" title="跨应用记忆汇总" width="620px">
+      <p class="memory__total">用户 {{ aggregateUser }}，共 {{ aggregateTotal }} 条</p>
+      <el-table :data="aggregateApps" border>
+        <el-table-column prop="app_uuid" label="应用" min-width="220" show-overflow-tooltip />
+        <el-table-column prop="count" label="记忆数" width="100" />
+        <el-table-column prop="hits" label="累计命中" width="100" />
+        <el-table-column prop="last_updated" label="最近更新" width="180" />
+      </el-table>
+      <template #footer>
+        <el-button @click="aggregateVisible = false">关闭</el-button>
       </template>
     </el-dialog>
   </div>

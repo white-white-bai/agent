@@ -127,6 +127,25 @@ def test_upsert_dedups_and_keeps_scope_isolation():
     assert len(store.list_memories("t")[0]) == 3
 
 
+def test_aggregate_user_memories_by_app(api_client):
+    settings = _settings()
+    store.create_memory(
+        tenant_code="t", app_uuid="a1", user_key="u1", kind="fact", content="应用一记忆", settings=settings
+    )
+    store.create_memory(
+        tenant_code="t", app_uuid="a2", user_key="u1", kind="fact", content="应用二记忆", settings=settings
+    )
+
+    response = api_client.get(
+        "/admin/user-memories/aggregate", params={"user_key": "u1", "tenant_code": "t"}
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["total"] == 2
+    assert {(item["app_uuid"], item["count"]) for item in data["apps"]} == {("a1", 1), ("a2", 1)}
+
+
 def test_upsert_near_duplicate_merges_by_cosine_threshold():
     settings = _settings(embedding_dim=2, user_memory_dedup_threshold=0.9)
     first = store.upsert_memory(

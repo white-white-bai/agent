@@ -42,7 +42,17 @@ async def test_browser_tools_only_assembled_when_enabled():
         AgentAppDef(browser=True), enabled, ctx, tenant_code="t", thread_id="th"
     )
     names = {tool.name for tool in tools}
-    assert {"browser_open", "browser_click", "browser_fill", "browser_text"} <= names
+    assert {
+        "browser_open",
+        "browser_click",
+        "browser_fill",
+        "browser_text",
+        "browser_download",
+        "browser_new_tab",
+        "browser_tabs",
+        "browser_switch_tab",
+        "browser_close_tab",
+    } <= names
 
     disabled, _ = await build_agent_tools(
         AgentAppDef(browser=True), Settings(browser_enabled=False), ctx, tenant_code="t", thread_id="th"
@@ -112,6 +122,14 @@ class _FakePage:
     def expect_download(self) -> _FakeDownloadContext:
         return _FakeDownloadContext()
 
+    async def close(self) -> None:
+        return None
+
+
+class _FakeContext:
+    async def new_page(self) -> _FakePage:
+        return _FakePage()
+
 
 @pytest.mark.asyncio
 async def test_browser_session_snapshot_with_fake_page():
@@ -135,6 +153,25 @@ async def test_browser_download_saves_file(tmp_path):
 
     assert path.endswith("result.csv")
     assert Path(path).read_text(encoding="utf-8").startswith("a,b")
+
+
+@pytest.mark.asyncio
+async def test_browser_tabs_create_switch_and_close():
+    session = browser.BrowserSession(SimpleNamespace(browser_max_chars=100, browser_timeout_ms=1000))
+    session._context = _FakeContext()
+    session._page = await session._context.new_page()
+    session._pages = [session._page]
+
+    await session.new_tab("https://example.com/detail")
+    tabs = await session.tabs()
+    assert len(tabs) == 2
+    assert tabs[1]["active"] is True
+
+    await session.switch_tab(0)
+    assert (await session.tabs())[0]["active"] is True
+
+    await session.close_tab(0)
+    assert len(await session.tabs()) == 1
 
 
 @pytest.mark.asyncio
