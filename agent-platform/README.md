@@ -229,9 +229,9 @@ start → 意图识别 → 知识检索 → 内容生成 → 合规质检 → �
 
 ### 执行轨迹评测（CI 门禁）
 
-`agentapp/eval.py` 把 `stream_agent` 的 SSE 事件标准化为轨迹（`tool_calls` / `plan` / `reflections` / `answer` / `status`），
-按**标准工具调用顺序**计算 Levenshtein 距离并打分；同时支持禁用工具、答案关键字、状态/调用次数约束和可选 LLM judge。
-工具路径偏离、调用禁用工具或答案缺关键内容都会使用例失败。
+`agentapp/eval.py` 把 `stream_agent` 的 SSE 事件标准化为轨迹（`tool_calls` / `tool_events` / `plan` / `reflections` / `answer` / `status` / `duration_ms`），
+按**标准工具调用顺序**计算 Levenshtein 距离并打分；同时支持禁用工具、答案关键字、工具参数、状态/调用次数/耗时约束和可选 LLM judge。
+工具路径偏离、调用禁用工具、工具参数不符、答案缺关键内容或耗时超限都会使用例失败。
 
 ```bash
 # cases / traces 均为 JSONL（也支持 JSON 数组或 {"cases": [...]}）

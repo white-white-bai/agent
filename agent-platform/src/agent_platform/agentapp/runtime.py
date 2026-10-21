@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -54,8 +55,31 @@ def _tool_events(update: Any) -> list[dict[str, Any]]:
             content = message.content
             if not isinstance(content, str):
                 content = json.dumps(content, ensure_ascii=False, default=str)
-            events.append({"tool": getattr(message, "name", "") or "", "content": content[:500]})
+            events.append(
+                {
+                    "tool": getattr(message, "name", "") or "",
+                    "content": content[:500],
+                    "tool_call_id": str(getattr(message, "tool_call_id", "") or ""),
+                    "ts": time.time(),
+                }
+            )
     return events
+
+
+def _tool_calls(update: Any) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+    messages = (update or {}).get("messages") if isinstance(update, dict) else None
+    for message in messages or []:
+        for call in getattr(message, "tool_calls", []) or []:
+            calls.append(
+                {
+                    "id": str(call.get("id") or ""),
+                    "name": str(call.get("name") or ""),
+                    "args": call.get("args") if isinstance(call.get("args"), dict) else {},
+                    "ts": time.time(),
+                }
+            )
+    return calls
 
 
 def _interrupt_value(update: Any) -> dict[str, Any]:
@@ -100,18 +124,26 @@ async def _drive(graph: Any, payload: Any, config: dict[str, Any], sink: list[di
             text = message.content
             if isinstance(text, str) and text:
                 answer += text
-                yield {"type": "token", "content": text}
+                yield {"type": "token", "content": text, "ts": time.time()}
             continue
         for node, update in (chunk or {}).items():
             if node == _INTERRUPT:
                 interrupt_payload = _interrupt_value(update)
-                yield {"type": "agent_interrupt", **interrupt_payload}
+                yield {"type": "agent_interrupt", "ts": time.time(), **interrupt_payload}
+            elif node == AGENT_NODE:
+                calls = _tool_calls(update)
+                if calls:
+                    yield {"type": "agent_tool_call", "calls": calls, "ts": time.time()}
             elif node == PLAN_NODE:
-                yield {"type": "agent_plan", "plan": (update or {}).get("plan", "")}
+                yield {"type": "agent_plan", "plan": (update or {}).get("plan", ""), "ts": time.time()}
             elif node == TOOLS_NODE:
-                yield {"type": "agent_tool", "tools": _tool_events(update)}
+                yield {"type": "agent_tool", "tools": _tool_events(update), "ts": time.time()}
             elif node == REFLECT_NODE:
-                yield {"type": "agent_reflection", "rounds": len((update or {}).get("reflections") or [])}
+                yield {
+                    "type": "agent_reflection",
+                    "rounds": len((update or {}).get("reflections") or []),
+                    "ts": time.time(),
+                }
             elif node == FINALIZE_NODE:
                 answer = (update or {}).get("answer") or answer
 
@@ -120,10 +152,16 @@ async def _drive(graph: Any, payload: Any, config: dict[str, Any], sink: list[di
         yield {
             "type": "final",
             "answer": answer,
+            "ts": time.time(),
             "state": {"variables": {"chunks": list(sink), "answer": answer, "paused": True}},
         }
         return
-    yield {"type": "final", "answer": answer, "state": {"variables": {"chunks": list(sink), "answer": answer}}}
+    yield {
+        "type": "final",
+        "answer": answer,
+        "ts": time.time(),
+        "state": {"variables": {"chunks": list(sink), "answer": answer}},
+    }
 
 
 async def _prepare(agent_def: AgentAppDef, ctx: EngineContext, checkpointer: Any, thread_id: str | None, tenant_code: str, depth: int):

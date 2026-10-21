@@ -144,6 +144,51 @@ def test_parse_sse_events_ignores_invalid_lines():
     assert events == [{"type": "token", "content": "x"}]
 
 
+def test_trace_collects_tool_args_and_latency():
+    events = [
+        {"type": "agent_tool_call", "ts": 10.0, "calls": [{"id": "c1", "name": "weather", "args": {"city": "常州"}}]},
+        {"type": "agent_tool", "ts": 10.2, "tools": [{"tool": "weather", "tool_call_id": "c1", "content": "晴"}]},
+        {"type": "final", "ts": 11.0, "answer": "常州晴"},
+    ]
+
+    trace = trace_from_events("c1", events)
+
+    assert trace.tool_calls == ["weather"]
+    assert trace.tool_events[0]["args"] == {"city": "常州"}
+    assert trace.tool_events[0]["duration_ms"] == 200
+    assert trace.duration_ms == 1000
+
+
+@pytest.mark.asyncio
+async def test_expected_args_and_duration_constraints():
+    case = EvalCase(
+        id="args",
+        expected_tools=["weather"],
+        expected_tool_args={"weather": {"city": "常州"}},
+        max_duration_ms=500,
+    )
+    good = AgentTrace(
+        case_id="args",
+        tool_calls=["weather"],
+        tool_events=[{"name": "weather", "args": {"city": "常州"}}],
+        duration_ms=300,
+        answer="ok",
+    )
+    bad = AgentTrace(
+        case_id="args",
+        tool_calls=["weather"],
+        tool_events=[{"name": "weather", "args": {"city": "南京"}}],
+        duration_ms=900,
+        answer="ok",
+    )
+
+    assert (await evaluate_cases([case], {"args": good})).passed == 1
+    result = (await evaluate_cases([case], {"args": bad})).results[0]
+    assert not result.passed
+    assert result.arg_mismatches
+    assert any("耗时超限" in reason for reason in result.reasons)
+
+
 def test_example_eval_files_pass_as_ci_gate(capsys):
     cases = load_cases(ROOT / "evals/agent_cases.example.jsonl")
     traces = load_traces(ROOT / "evals/agent_traces.example.jsonl")

@@ -8,16 +8,19 @@
 - `id`：用例标识，必须与轨迹 `id` 一致。
 - `query`：原始任务，供 LLM judge 使用。
 - `expected_tools`：标准工具调用顺序；默认要求完全一致。
+- `expected_tool_args`：按工具名校验参数子集。
 - `forbidden_tools`：一旦出现即失败。
 - `answer_contains`：回答必须包含的关键字。
 - `min_path_score`：路径得分下限（0–1，默认 1.0）。
 - `max_tool_calls`：工具调用次数上限。
+- `max_duration_ms`：整条轨迹耗时上限。
 - `require_status`：期望状态（如 `completed` / `interrupted`）。
 - `judge` / `judge_min_score`：是否启用 LLM judge 及其通过线。
 
 轨迹字段：
 
-- `id`、`tool_calls`、`plan`、`reflections`、`answer`、`status`、`token_chars`、`error`。
+- `id`、`tool_calls`、`tool_events`、`plan`、`reflections`、`answer`、`status`、`token_chars`、`duration_ms`、`error`。
+- `tool_events` 记录每次调用的 `name` / `args` / `duration_ms`，用于参数与耗时评分。
 - 也可用 `events` 直接放 `stream_agent` 的 SSE 事件列表，评测器会自动抽取轨迹。
 
 运行：

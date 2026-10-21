@@ -1,2 +1,2 @@
-{"id":"weather.basic","tool_calls":["weather"],"plan":"查询天气后直接回答","reflections":0,"answer":"常州今天晴，26℃。","status":"completed","token_chars":18}
-{"id":"compliance.delegate","tool_calls":["knowledge_search","delegate_gov.compliance"],"plan":"先检索材料，再交给合规子 Agent","reflections":1,"answer":"材料整体合规，建议补齐签章页。","status":"completed","token_chars":32}
+{"id":"weather.basic","tool_calls":["weather"],"tool_events":[{"name":"weather","args":{"city":"常州"},"duration_ms":120}],"plan":"查询天气后直接回答","reflections":0,"answer":"常州今天晴，26℃。","status":"completed","token_chars":18,"duration_ms":800}
+{"id":"compliance.delegate","tool_calls":["knowledge_search","delegate_gov.compliance"],"tool_events":[{"name":"knowledge_search","args":{"query":"材料合规"},"duration_ms":180},{"name":"delegate_gov.compliance","args":{"query":"审查材料"},"duration_ms":900}],"plan":"先检索材料，再交给合规子 Agent","reflections":1,"answer":"材料整体合规，建议补齐签章页。","status":"completed","token_chars":32,"duration_ms":2400}

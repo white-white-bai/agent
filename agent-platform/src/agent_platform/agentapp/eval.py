@@ -23,22 +23,26 @@ class AgentTrace:
 
     case_id: str = ""
     tool_calls: list[str] = field(default_factory=list)
+    tool_events: list[dict[str, Any]] = field(default_factory=list)
     plan: str = ""
     reflections: int = 0
     answer: str = ""
     status: str = "completed"
     token_chars: int = 0
+    duration_ms: int = 0
     error: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.case_id,
             "tool_calls": self.tool_calls,
+            "tool_events": self.tool_events,
             "plan": self.plan,
             "reflections": self.reflections,
             "answer": self.answer,
             "status": self.status,
             "token_chars": self.token_chars,
+            "duration_ms": self.duration_ms,
             "error": self.error,
         }
 
@@ -51,8 +55,10 @@ class EvalCase(BaseModel):
     expected_tools: list[str] = Field(default_factory=list)
     forbidden_tools: list[str] = Field(default_factory=list)
     answer_contains: list[str] = Field(default_factory=list)
+    expected_tool_args: dict[str, dict[str, Any]] = Field(default_factory=dict)
     min_path_score: float = 1.0
     max_tool_calls: int | None = None
+    max_duration_ms: int | None = None
     require_status: str = ""
     judge: bool = False
     judge_min_score: float = 0.7
@@ -68,6 +74,7 @@ class EvalResult:
     actual_tools: list[str]
     forbidden_hits: list[str] = field(default_factory=list)
     missing_answer: list[str] = field(default_factory=list)
+    arg_mismatches: list[str] = field(default_factory=list)
     judge_score: float | None = None
     reasons: list[str] = field(default_factory=list)
     trace: AgentTrace | None = None
@@ -82,6 +89,7 @@ class EvalResult:
             "actual_tools": self.actual_tools,
             "forbidden_hits": self.forbidden_hits,
             "missing_answer": self.missing_answer,
+            "arg_mismatches": self.arg_mismatches,
             "judge_score": self.judge_score,
             "reasons": self.reasons,
             "trace": self.trace.to_dict() if self.trace else None,
@@ -142,19 +150,43 @@ def parse_sse_events(text: str) -> list[dict[str, Any]]:
 def trace_from_events(case_id: str, events: Iterable[dict[str, Any]], *, answer: str = "") -> AgentTrace:
     """把 stream_agent 的 SSE 事件标准化为轨迹。"""
     trace = AgentTrace(case_id=case_id, answer=answer)
+    pending: dict[str, dict[str, Any]] = {}
+    timestamps: list[float] = []
     for event in events or []:
         if not isinstance(event, dict):
             continue
         kind = str(event.get("type") or "")
+        timestamp = float(event.get("ts") or 0)
+        if timestamp:
+            timestamps.append(timestamp)
         if kind == "token":
             trace.token_chars += len(str(event.get("content") or ""))
         elif kind == "agent_plan":
             trace.plan = str(event.get("plan") or "")
+        elif kind == "agent_tool_call":
+            for call in event.get("calls") or []:
+                if isinstance(call, dict):
+                    call_id = str(call.get("id") or call.get("name") or "")
+                    if call_id:
+                        pending[call_id] = {**call, "ts": call.get("ts") or timestamp}
         elif kind == "agent_tool":
             for item in event.get("tools") or []:
                 name = _tool_name(item)
-                if name:
-                    trace.tool_calls.append(name)
+                if not name:
+                    continue
+                call_id = str(item.get("tool_call_id") or "") if isinstance(item, dict) else ""
+                call = pending.pop(call_id, None) or pending.pop(name, None)
+                started = float((call or {}).get("ts") or 0)
+                duration = round(max((timestamp - started) * 1000, 0)) if started and timestamp else 0
+                trace.tool_events.append(
+                    {
+                        "name": name,
+                        "args": (call or {}).get("args") or {},
+                        "tool_call_id": call_id,
+                        "duration_ms": duration,
+                    }
+                )
+                trace.tool_calls.append(name)
         elif kind == "agent_reflection":
             trace.reflections = max(trace.reflections, int(event.get("rounds") or 0))
         elif kind == "agent_interrupt":
@@ -168,6 +200,8 @@ def trace_from_events(case_id: str, events: Iterable[dict[str, Any]], *, answer:
             variables = state.get("variables") if isinstance(state, dict) else {}
             if isinstance(variables, dict) and variables.get("paused"):
                 trace.status = "interrupted"
+    if timestamps:
+        trace.duration_ms = round(max((max(timestamps) - min(timestamps)) * 1000, 0))
     return trace
 
 
@@ -183,11 +217,13 @@ def normalize_trace(payload: dict[str, Any], *, fallback_id: str = "") -> AgentT
         trace = AgentTrace(
             case_id=case_id,
             tool_calls=[name for item in tools or [] if (name := _tool_name(item))],
+            tool_events=list(payload.get("tool_events") or []),
             plan=str(payload.get("plan") or ""),
             reflections=int(payload.get("reflections") or 0),
             answer=str(payload.get("answer") or ""),
             status=str(payload.get("status") or "completed"),
             token_chars=int(payload.get("token_chars") or 0),
+            duration_ms=int(payload.get("duration_ms") or 0),
             error=str(payload.get("error") or ""),
         )
     for key in ("answer", "status", "plan", "error"):
@@ -196,6 +232,10 @@ def normalize_trace(payload: dict[str, Any], *, fallback_id: str = "") -> AgentT
             setattr(trace, key, str(value))
     if payload.get("reflections") is not None:
         trace.reflections = int(payload.get("reflections") or 0)
+    if payload.get("duration_ms") is not None:
+        trace.duration_ms = int(payload.get("duration_ms") or 0)
+    if payload.get("tool_events") is not None:
+        trace.tool_events = list(payload.get("tool_events") or [])
     if payload.get("token_chars") is not None:
         trace.token_chars = int(payload.get("token_chars") or 0)
     return trace
@@ -224,6 +264,12 @@ def path_score(expected: list[str], actual: list[str]) -> tuple[float, int]:
     return max(0.0, 1.0 - distance / longest), distance
 
 
+def _args_match(actual: Any, expected: dict[str, Any]) -> bool:
+    if not isinstance(actual, dict):
+        return False
+    return all(actual.get(key) == value for key, value in expected.items())
+
+
 def _normalize_judge(value: dict[str, Any] | float) -> tuple[float, str]:
     if isinstance(value, (int, float)):
         return max(0.0, min(float(value), 1.0)), ""
@@ -235,6 +281,13 @@ async def score_trace(trace: AgentTrace, case: EvalCase, judge: Judge | None = N
     score, distance = path_score(case.expected_tools, trace.tool_calls)
     forbidden = [name for name in trace.tool_calls if name in set(case.forbidden_tools)]
     missing = [text for text in case.answer_contains if text not in trace.answer]
+    arg_mismatches: list[str] = []
+    for tool_name, expected_args in case.expected_tool_args.items():
+        events = [item for item in trace.tool_events if item.get("name") == tool_name]
+        if not events:
+            arg_mismatches.append(f"{tool_name}: 缺少参数记录")
+        elif not any(_args_match(item.get("args"), expected_args) for item in events):
+            arg_mismatches.append(f"{tool_name}: 参数不匹配")
     reasons: list[str] = []
     if score < case.min_path_score:
         reasons.append(f"工具路径偏离：期望 {case.expected_tools}，实际 {trace.tool_calls}")
@@ -242,6 +295,10 @@ async def score_trace(trace: AgentTrace, case: EvalCase, judge: Judge | None = N
         reasons.append(f"调用了禁用工具：{forbidden}")
     if missing:
         reasons.append(f"答案缺少关键内容：{missing}")
+    if arg_mismatches:
+        reasons.append(f"工具参数不符合预期：{arg_mismatches}")
+    if case.max_duration_ms is not None and trace.duration_ms > case.max_duration_ms:
+        reasons.append(f"执行耗时超限：{trace.duration_ms} > {case.max_duration_ms} ms")
     if case.require_status and trace.status != case.require_status:
         reasons.append(f"状态不符：期望 {case.require_status}，实际 {trace.status}")
     if case.max_tool_calls is not None and len(trace.tool_calls) > case.max_tool_calls:
@@ -269,6 +326,7 @@ async def score_trace(trace: AgentTrace, case: EvalCase, judge: Judge | None = N
         actual_tools=list(trace.tool_calls),
         forbidden_hits=forbidden,
         missing_answer=missing,
+        arg_mismatches=arg_mismatches,
         judge_score=judge_score,
         reasons=reasons,
         trace=trace,
@@ -341,7 +399,7 @@ def render_report(report: EvalReport) -> str:
         mark = "PASS" if item.passed else "FAIL"
         lines.append(
             f"[{mark}] {item.case_id} path={item.path_score:.2f} distance={item.distance} "
-            f"actual={item.actual_tools}"
+            f"duration={item.trace.duration_ms if item.trace else 0}ms actual={item.actual_tools}"
         )
         for reason in item.reasons:
             lines.append(f"       - {reason}")
