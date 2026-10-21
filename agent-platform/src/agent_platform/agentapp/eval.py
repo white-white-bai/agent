@@ -120,6 +120,24 @@ def _tool_name(item: Any) -> str:
     return ""
 
 
+def parse_sse_events(text: str) -> list[dict[str, Any]]:
+    """解析 `data: {...}` SSE 文本；非 JSON 行忽略。"""
+    events: list[dict[str, Any]] = []
+    for line in (text or "").splitlines():
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if not payload:
+            continue
+        try:
+            item = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict):
+            events.append(item)
+    return events
+
+
 def trace_from_events(case_id: str, events: Iterable[dict[str, Any]], *, answer: str = "") -> AgentTrace:
     """把 stream_agent 的 SSE 事件标准化为轨迹。"""
     trace = AgentTrace(case_id=case_id, answer=answer)

@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI, Header
 from fastapi.responses import StreamingResponse
 
 from agent_platform.agentapp.runtime import stream_agent
-from agent_platform.api import accounts, admin, compat, compat_api, services
+from agent_platform.api import accounts, admin, compat, compat_api, hitl_webhook, services
 from agent_platform.api.deps import (
     build_request_tracer,
     get_checkpointer,
@@ -52,6 +52,7 @@ app = FastAPI(title="agent-platform", version="0.1.0", lifespan=lifespan)
 app.include_router(admin.router)
 app.include_router(accounts.router)
 app.include_router(compat_api.router)
+app.include_router(hitl_webhook.router)
 
 
 @app.get("/healthz")

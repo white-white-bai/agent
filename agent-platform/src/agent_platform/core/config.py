@@ -81,6 +81,8 @@ class Settings(BaseSettings):
     hitl_webhook_url: str = ""
     hitl_webhook_secret: str = ""
     hitl_webhook_timeout_seconds: float = 3.0
+    hitl_callback_base_url: str = ""
+    hitl_action_ttl_seconds: int = 86400
 
     # 浏览器操作（Playwright 可选依赖；AgentAppDef.browser=true 时才装配工具）
     browser_enabled: bool = False

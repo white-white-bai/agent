@@ -58,6 +58,7 @@ from agent_platform.checkpoint.factory import build_checkpointer
 from agent_platform.core import metrics
 from agent_platform.core.accounts import AdminPrincipal
 from agent_platform.core.config import get_settings
+from agent_platform.core.hitl_tokens import approval_links, graph_interrupt_id
 from agent_platform.core.notifications import notify_hitl
 from agent_platform.engine.builder import build_graph
 from agent_platform.engine.context import EngineContext
@@ -333,6 +334,13 @@ async def run_agent_stream(
                             "app_uuid": app_uuid,
                             "resume_endpoint": f"/admin/apps/{app_uuid}/agent/resume",
                             "interrupt": item,
+                            "approval": approval_links(
+                                kind="agent",
+                                app_uuid=app_uuid,
+                                thread_id=thread_id,
+                                interrupt_id=str(item.get("interrupt_id") or ""),
+                                settings=get_settings(),
+                            ),
                         },
                         get_settings(),
                     )
@@ -388,6 +396,13 @@ async def resume_agent_run(
                             "app_uuid": app_uuid,
                             "resume_endpoint": f"/admin/apps/{app_uuid}/agent/resume",
                             "interrupt": item,
+                            "approval": approval_links(
+                                kind="agent",
+                                app_uuid=app_uuid,
+                                thread_id=request.conversation_id,
+                                interrupt_id=str(item.get("interrupt_id") or ""),
+                                settings=get_settings(),
+                            ),
                         },
                         get_settings(),
                     )
@@ -1518,6 +1533,13 @@ async def run_graph_stream(
                             "app_uuid": app_uuid,
                             "resume_endpoint": f"/admin/runs/{thread_id}/resume",
                             "interrupt": item,
+                            "approval": approval_links(
+                                kind="graph",
+                                app_uuid=app_uuid,
+                                thread_id=thread_id,
+                                interrupt_id=graph_interrupt_id(item),
+                                settings=settings,
+                            ),
                         },
                         settings,
                     )
@@ -1659,6 +1681,13 @@ async def resume_run(
                             "app_uuid": run.app_uuid,
                             "resume_endpoint": f"/admin/runs/{thread_id}/resume",
                             "interrupt": item,
+                            "approval": approval_links(
+                                kind="graph",
+                                app_uuid=run.app_uuid,
+                                thread_id=thread_id,
+                                interrupt_id=graph_interrupt_id(item),
+                                settings=get_settings(),
+                            ),
                         },
                         get_settings(),
                     )

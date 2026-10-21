@@ -13,6 +13,7 @@ from agent_platform.agentapp.eval import (
     load_cases,
     load_traces,
     main,
+    parse_sse_events,
     path_score,
     sequence_distance,
     trace_from_events,
@@ -134,6 +135,13 @@ async def test_llm_judge_can_fail_or_pass():
     missing_judge = await evaluate_cases([case], {"judge": trace})
     assert not missing_judge.results[0].passed
     assert any("未配置 judge" in reason for reason in missing_judge.results[0].reasons)
+
+
+def test_parse_sse_events_ignores_invalid_lines():
+    events = parse_sse_events(
+        'event: message\ndata: {"type": "token", "content": "x"}\n\nnot-json\ndata: bad\n'
+    )
+    assert events == [{"type": "token", "content": "x"}]
 
 
 def test_example_eval_files_pass_as_ci_gate(capsys):

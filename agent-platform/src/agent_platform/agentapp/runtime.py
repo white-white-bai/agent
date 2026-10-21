@@ -58,7 +58,9 @@ def _interrupt_value(update: Any) -> dict[str, Any]:
     for item in items:
         value = getattr(item, "value", item)
         if isinstance(value, dict):
-            return value
+            payload = dict(value)
+            payload.setdefault("interrupt_id", str(getattr(item, "id", "") or ""))
+            return payload
     return {}
 
 
@@ -73,7 +75,9 @@ async def _pending_interrupt(graph: Any, config: dict[str, Any]) -> dict[str, An
         for item in getattr(task, "interrupts", ()) or ():
             value = getattr(item, "value", None)
             if isinstance(value, dict):
-                return value
+                payload = dict(value)
+                payload.setdefault("interrupt_id", str(getattr(item, "id", "") or ""))
+                return payload
     return {}
 
 
@@ -156,6 +160,19 @@ async def stream_agent(
             yield item
     finally:
         await _close_session(thread_id or "")
+
+
+async def pending_agent_interrupt(
+    agent_def: AgentAppDef,
+    ctx: EngineContext,
+    *,
+    checkpointer: Any,
+    thread_id: str,
+    tenant_code: str = "",
+    depth: int = 0,
+) -> dict[str, Any] | None:
+    graph, _sink, config = await _prepare(agent_def, ctx, checkpointer, thread_id, tenant_code, depth)
+    return await _pending_interrupt(graph, config)
 
 
 async def resume_agent(

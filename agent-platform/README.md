@@ -240,6 +240,14 @@ python scripts/eval_agent_traces.py \
 # 失败返回 1，可直接接 CI；--json 输出结构化报告
 ```
 
+录制真实运行（服务已启动、Agent 已发布；`--cases` 至少含 `id` / `query`）：
+
+```bash
+python scripts/record_agent_trace.py \
+  --app-uuid <uuid> --cases evals/queries.jsonl \
+  --out evals/recorded_traces.jsonl
+```
+
 默认用例要求工具序列完全一致（`min_path_score=1.0`）；给测试数据时用 `min_path_score` 放宽部分匹配。
 `tests/test_agent_eval.py` 已把示例文件作为 CI 门禁，并提供 judge/禁用工具/偏离路径的单元用例。
 
@@ -443,6 +451,10 @@ python -m agent_platform.worker.main
   `cancelled`；恢复/取消/超时都会写 `resolved_by` / `resolved_at`。两个恢复请求并发时只有一个能原子抢占成功。
 - 超时回收：`AP_HITL_RUN_TIMEOUT_SECONDS>0` 时，`GET /admin/runs` 会把超过该时长仍处于 `interrupted` 的运行
   标记为 `expired`；`0`（默认）关闭。
+- 外部一键审批：配置 `AP_HITL_WEBHOOK_SECRET` 后，Webhook payload 的 `approval` 带 HMAC-SHA256 签名 token
+  （绑定 kind/app/thread/interrupt，默认 24h 过期）及 `approve_url` / `reject_url`；
+  `POST /webhooks/hitl/approve|reject` body `{token, edits?}` 无需管理端登录。token 中的 interrupt id 必须与当前
+  待审批中断一致，图运行恢复使用原子 `claim_run`；Agent 会话使用进程内锁 + 中断态校验，多副本部署如需严格幂等应再接共享存储。
 - **对外 `/v1`、云智链路不暴露 interrupt**：审批节点在外部链路按 `default_action` 自动通过，仍以
   `message`/`message_end` 收尾，Java/前端协议零改动。
 - `interrupt()` 恢复会从头重跑审批节点，审批节点只做纯表达式求值；不要在审批节点前放不可重入的副作用。
