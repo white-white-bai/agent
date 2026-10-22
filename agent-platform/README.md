@@ -214,7 +214,7 @@ start → 意图识别 → 知识检索 → 内容生成 → 合规质检 → �
 - **外部审批通知**：配置 `AP_HITL_WEBHOOK_URL` 后，图运行与 Agent 应用中断时向 Webhook POST `{event, payload}`（含 `thread_id` / `app_uuid` / `resume_endpoint` / 中断载荷）；`AP_HITL_WEBHOOK_SECRET` 作为 `X-Webhook-Secret` 发送。另支持 `AP_HITL_SLACK_WEBHOOK_URL`（text）与 `AP_HITL_TEAMS_WEBHOOK_URL`（MessageCard）专用格式。通知失败按 `AP_HITL_WEBHOOK_ATTEMPTS` 重试，最终失败只记日志，不阻断审批和 SSE。
 - **不可信内容隔离**：开启 `AP_PROMPT_GUARD_ENABLED=true` 后，声明式工具、MCP 动态工具、知识检索、子 Agent 返回文本，以及图内 agent 模式的工具观察，都会先脱敏邮箱/手机号/API key、剥离常见指令注入，再用 `<untrusted_data>` 边界包裹后送入模型；`AP_PROMPT_GUARD_MAX_CHARS` 控制截断长度。再开 `AP_PROMPT_GUARD_LLM_ENABLED=true` 会在规则清洗前追加一次模型语义判定（`AP_PROMPT_GUARD_LLM_PROVIDER` 留空则用 Agent 的 provider），分数达到 `AP_PROMPT_GUARD_LLM_THRESHOLD` 的内容直接拦截为占位文本；模型调用失败降级为规则清洗。默认关闭，避免改变既有输出。
 - **浏览器操作（可选）**：Agent 定义里 `browser=true` 且 `AP_BROWSER_ENABLED=true` 时，装配 `browser_open` / `browser_click` / `browser_click_xy` / `browser_scroll` / `browser_fill` / `browser_press` / `browser_text` / `browser_inspect` / `browser_som` / `browser_frames` / `browser_captcha` / `browser_screenshot` / `browser_download` / `browser_upload` / `browser_new_tab` / `browser_tabs` / `browser_switch_tab` / `browser_close_tab` 工具。需要先 `pip install -e ".[browser]"` 并 `playwright install chromium`；同一 `thread_id` 复用页面，运行结束自动关闭。`browser_click` / `fill` / `press` / `text` 支持 `frame_selector` 操作 iframe 内元素，Playwright CSS 选择器会自动穿透开放 Shadow DOM；`browser_inspect` 返回带编号和中心坐标的可交互元素，配合 `browser_click_xy` 做坐标式操作；`browser_som` 会在页面上叠加编号框后再截图（Set-of-Mark），并返回编号/坐标；`browser_captcha` 只检测 reCAPTCHA/hCaptcha/Turnstile 并提示人工处理，不提供绕过。开启 `AP_BROWSER_VISION_ENABLED=true` 后额外装配 `browser_look`，把当前页面截图发给多模态模型（`AP_BROWSER_VISION_PROVIDER` 选择 `AP_LLM_MODELS` 中的视觉模型，留空用第一个），返回文字描述。`AP_BROWSER_STORAGE_STATE` 可持久化登录态（cookie/localStorage，注意文件权限），`AP_BROWSER_DOWNLOAD_DIR` / `AP_BROWSER_UPLOAD_DIR` 分别限制下载与可上传目录。URL 只允许 http/https，默认拦截 localhost/私网/链路本地 IP；生产建议配置 `AP_BROWSER_ALLOWED_HOSTS` 白名单，必要时才开 `AP_BROWSER_ALLOW_PRIVATE`。
-- **执行轨迹**：`AP_AGENT_TRACE_ENABLED=true` 时每次流式 Agent 运行把问题、工具路径、`tool_events`、答案、状态、耗时写入 `ap_agent_trace`；管理端 `GET /admin/agent-traces`、`GET /admin/agent-traces/stats`（状态、平均/P95 耗时、工具 Top、每日趋势）与「Agent 轨迹」页可查询。
+- **执行轨迹**：`AP_AGENT_TRACE_ENABLED=true` 时每次流式 Agent 运行（含 HITL 恢复）把问题、工具路径、`tool_events`、答案、状态、耗时写入 `ap_agent_trace`；管理端 `GET /admin/agent-traces`、`GET /admin/agent-traces/stats`（状态、平均/P95 耗时、工具 Top、每日趋势）与「Agent 轨迹」页可查询；`scripts/export_agent_traces.py` 可导出为评测轨迹。
 - **入口**：`/v1/chat-messages`（含 transfer 链路）按 `app_type` 分叉到 `stream_agent`，产出与图一致的 `token` / `final` 事件；`runWorkflow` / `/v1/workflows/run` 同步分叉。
 
 **管理端接口**（权限点 `agent:read` / `agent:write`）
@@ -246,6 +246,11 @@ python scripts/eval_agent_traces.py \
 录制真实运行（服务已启动、Agent 已发布）：
 
 ```bash
+# 0) 也可直接从已落库的生产轨迹导出（AP_AGENT_TRACE_ENABLED=true 后）
+python scripts/export_agent_traces.py \
+  --tenant-code <tenant> --app-uuid <uuid> --days 7 --limit 100 \
+  --out evals/prod_traces.jsonl
+
 # 1) 从 ap_message 导出真实用户 query（默认 100 条）
 python scripts/export_agent_queries.py \
   --tenant-code <tenant> --app-uuid <uuid> --limit 100 \

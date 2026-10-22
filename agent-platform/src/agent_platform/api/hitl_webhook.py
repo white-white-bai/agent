@@ -155,6 +155,7 @@ async def _resume_agent_app(
         checkpointer=checkpointer,
         thread_id=thread_id,
         tenant_code=app_row.tenant_code,
+        app_uuid=app_uuid,
     ):
         if item.get("type") == "agent_interrupt":
             status = "interrupted"

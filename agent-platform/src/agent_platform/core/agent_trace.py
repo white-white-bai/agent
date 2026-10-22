@@ -70,6 +70,46 @@ def list_traces(
         return rows, total
 
 
+def export_traces(
+    tenant_code: str,
+    *,
+    app_uuid: str = "",
+    days: int = 7,
+    limit: int = 100,
+    status: str = "",
+) -> list[dict[str, Any]]:
+    """把生产轨迹导出为 eval_agent_traces.py 可直接读取的 JSON 结构。"""
+    days = min(max(int(days or 7), 1), 90)
+    limit = min(max(int(limit or 100), 1), 10000)
+    today = datetime.now(timezone.utc).replace(tzinfo=None).date()
+    start_date = today - timedelta(days=days - 1)
+    since = datetime(start_date.year, start_date.month, start_date.day)
+    with session_scope() as session:
+        stmt = select(AgentTraceLog).where(AgentTraceLog.created_at >= since)
+        if tenant_code:
+            stmt = stmt.where(AgentTraceLog.tenant_code == tenant_code)
+        if app_uuid:
+            stmt = stmt.where(AgentTraceLog.app_uuid == app_uuid)
+        if status:
+            stmt = stmt.where(AgentTraceLog.status == status)
+        rows = list(session.scalars(stmt.order_by(AgentTraceLog.id.desc()).limit(limit)).all())
+    return [
+        {
+            "id": row.uuid,
+            "case_id": row.uuid,
+            "query": row.query,
+            "tool_calls": list(row.tool_calls or []),
+            "tool_events": list(row.tool_events or []),
+            "answer": row.answer,
+            "status": row.status,
+            "duration_ms": int(row.duration_ms or 0),
+            "token_chars": int(row.token_chars or 0),
+            "error": "",
+        }
+        for row in rows
+    ]
+
+
 def trace_stats(
     tenant_code: str = "",
     *,

@@ -250,16 +250,32 @@ async def resume_agent(
     checkpointer: Any,
     thread_id: str,
     tenant_code: str = "",
+    app_uuid: str = "",
     depth: int = 0,
 ) -> AsyncIterator[dict[str, Any]]:
     """对处于中断暂停态的会话续跑（人工批准 / 拒绝）。"""
     from langgraph.types import Command
 
+    events: list[dict[str, Any]] = []
     try:
         graph, sink, config = await _prepare(agent_def, ctx, checkpointer, thread_id, tenant_code, depth)
         async for item in _drive(graph, Command(resume=resume_value), config, sink):
+            events.append(item)
             yield item
     finally:
+        if events and app_uuid and get_settings().agent_trace_enabled:
+            try:
+                from agent_platform.core.agent_trace import save_trace
+
+                save_trace(
+                    tenant_code=tenant_code,
+                    app_uuid=app_uuid,
+                    thread_id=thread_id,
+                    query="",
+                    events=events,
+                )
+            except Exception:
+                logger.warning("Agent 恢复轨迹落库失败", exc_info=True)
         await _close_session(thread_id)
 
 

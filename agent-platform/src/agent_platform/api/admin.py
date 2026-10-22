@@ -392,6 +392,7 @@ async def resume_agent_run(
                 checkpointer=build_checkpointer(get_settings()),
                 thread_id=request.conversation_id,
                 tenant_code=app_row.tenant_code,
+                app_uuid=app_uuid,
             ):
                 if item.get("type") == "agent_interrupt":
                     await notify_hitl(
