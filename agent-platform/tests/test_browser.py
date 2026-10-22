@@ -73,6 +73,7 @@ async def test_browser_tools_only_assembled_when_enabled():
         "browser_click_xy",
         "browser_scroll",
         "browser_inspect",
+        "browser_som",
         "browser_frames",
         "browser_captcha",
         "browser_fill",
@@ -189,6 +190,8 @@ class _FakePage:
         return _FakeLocator()
 
     async def evaluate(self, script: str) -> list:
+        if "__ap_som_layer" in script:
+            return [{"tag": "button", "text": "提交", "x": 60, "y": 40}]
         return [
             {"tag": "button", "type": "", "text": "提交", "x": 10, "y": 20, "width": 100, "height": 40},
         ]
@@ -316,6 +319,35 @@ async def test_browser_inspect_returns_numbered_elements(tmp_path):
 
     assert "[1] <button> 提交 @ (60, 40)" in result
     assert "SCREENSHOT:" in result
+
+
+@pytest.mark.asyncio
+async def test_browser_som_annotates_and_cleans_up(tmp_path):
+    session = browser.BrowserSession(
+        SimpleNamespace(browser_max_chars=100, browser_screenshot_dir=str(tmp_path))
+    )
+    page = _FakePage()
+    calls = []
+    original = page.evaluate
+
+    async def evaluate(script: str):
+        calls.append(script)
+        return await original(script)
+
+    async def screenshot(path: str = "", full_page: bool = False) -> None:
+        await asyncio.to_thread(Path(path).write_bytes, b"png")
+
+    page.evaluate = evaluate
+    page.screenshot = screenshot
+    session._page = page
+
+    result = await session.som()
+
+    assert "[1] <button> 提交 @ (60, 40)" in result
+    assert "SCREENSHOT:" in result
+    assert len(calls) == 2
+    assert "__ap_som_layer" in calls[0]
+    assert "__ap_som_layer" in calls[1]
 
 
 @pytest.mark.asyncio

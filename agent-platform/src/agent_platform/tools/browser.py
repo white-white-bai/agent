@@ -18,6 +18,60 @@ from pydantic import Field, create_model
 
 logger = logging.getLogger(__name__)
 
+_SOM_ANNOTATE = """() => {
+    const selector = 'a,button,input,select,textarea,[role="button"],[onclick]';
+    const roots = [document];
+    const candidates = [];
+    while (roots.length) {
+        const root = roots.shift();
+        root.querySelectorAll(selector).forEach((el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            const text = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '').trim();
+            candidates.push({ el, tag: el.tagName.toLowerCase(), text: text.slice(0, 80), r, style });
+        });
+        root.querySelectorAll('*').forEach((el) => { if (el.shadowRoot) roots.push(el.shadowRoot); });
+    }
+    const visible = candidates.filter((item) =>
+        item.r.width > 0 && item.r.height > 0 && item.style.visibility !== 'hidden' && item.style.display !== 'none'
+    ).slice(0, 120);
+    const layer = document.createElement('div');
+    layer.id = '__ap_som_layer';
+    Object.assign(layer.style, {
+        position: 'absolute', left: '0', top: '0', width: '0', height: '0',
+        zIndex: '2147483647', pointerEvents: 'none'
+    });
+    document.body.appendChild(layer);
+    return visible.map((item, index) => {
+        const x = item.r.x + window.scrollX;
+        const y = item.r.y + window.scrollY;
+        const box = document.createElement('div');
+        Object.assign(box.style, {
+            position: 'absolute', left: x + 'px', top: y + 'px',
+            width: item.r.width + 'px', height: item.r.height + 'px',
+            border: '2px solid #ff2d55', boxSizing: 'border-box', background: 'rgba(255,45,85,0.06)'
+        });
+        const label = document.createElement('div');
+        label.textContent = String(index + 1);
+        Object.assign(label.style, {
+            position: 'absolute', left: x + 'px', top: Math.max(y - 18, 0) + 'px',
+            background: '#ff2d55', color: '#fff', font: '12px/18px sans-serif',
+            padding: '0 4px', borderRadius: '2px'
+        });
+        layer.appendChild(box);
+        layer.appendChild(label);
+        return {
+            tag: item.tag, text: item.text,
+            x: Math.round(x + item.r.width / 2), y: Math.round(y + item.r.height / 2)
+        };
+    });
+}"""
+
+_SOM_CLEAR = """() => {
+    const layer = document.getElementById('__ap_som_layer');
+    if (layer) layer.remove();
+}"""
+
 
 class BrowserError(RuntimeError):
     pass
@@ -258,6 +312,24 @@ class BrowserSession:
         body = "\n".join(lines) if lines else "（未发现可交互元素）"
         return f"{body}\nSCREENSHOT: {path}"
 
+    async def som(self) -> str:
+        """给可交互元素叠加编号框后截图，返回编号/坐标与图片路径。"""
+        page = await self.page()
+        try:
+            elements = await page.evaluate(_SOM_ANNOTATE)
+            path = await self.screenshot()
+        finally:
+            try:
+                await page.evaluate(_SOM_CLEAR)
+            except Exception:
+                logger.debug("清理 Set-of-Mark 覆盖层失败", exc_info=True)
+        lines = []
+        for index, item in enumerate(elements or [], start=1):
+            label = item.get("text") or ""
+            lines.append(f"[{index}] <{item.get('tag')}> {label} @ ({item.get('x')}, {item.get('y')})")
+        body = "\n".join(lines) if lines else "（未发现可交互元素）"
+        return f"{body}\nSCREENSHOT: {path}"
+
     async def screenshot(self) -> str:
         page = await self.page()
         directory = Path(str(getattr(self.settings, "browser_screenshot_dir", ".run/browser") or ".run/browser"))
@@ -435,6 +507,10 @@ def build_browser_tools(
         session = await get_session(thread_id, settings)
         return _wrap(await session.inspect(), "browser_inspect")
 
+    async def _som() -> Any:
+        session = await get_session(thread_id, settings)
+        return _wrap(await session.som(), "browser_som")
+
     async def _frames() -> Any:
         session = await get_session(thread_id, settings)
         return _wrap(await session.frames(), "browser_frames")
@@ -551,6 +627,14 @@ def build_browser_tools(
             description=(
                 "返回带编号与中心坐标的可交互元素（链接/按钮/输入框等）并截图；"
                 "适合配合 browser_click_xy 做坐标式操作。"
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=_som,
+            name="browser_som",
+            description=(
+                "给可交互元素叠加编号框后截图（Set-of-Mark），同时返回编号、文字与中心坐标；"
+                "适合视觉模型定位元素后再用 browser_click_xy。"
             ),
         ),
         StructuredTool.from_function(
