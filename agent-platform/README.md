@@ -285,6 +285,11 @@ python scripts/record_agent_trace.py \
 需要 gVisor 时配置 `AP_CODE_SANDBOX_RUNTIME=runsc`；自定义 seccomp 用 `AP_CODE_SANDBOX_SECCOMP_PROFILE`。
 Docker 不可用时该模式**失败关闭**，不会静默回退到进程内执行。
 
+生产可用 `AP_CODE_SANDBOX_REQUIRE_ISOLATION=true` 强制隔离：启动与每次代码执行前校验，`inprocess`、找不到 docker、
+镜像不在白名单、`AP_CODE_SANDBOX_REQUIRE_PINNED_IMAGE=true` 但镜像未用 `@sha256:` 固定、或
+`AP_CODE_SANDBOX_REQUIRED_RUNTIME` 与实际 runtime 不符时直接失败。
+`GET /admin/sandbox/status` 可查看当前策略自检结果（`ready` 与 `issues`），不启动容器。
+
 ## 链路追踪（Langfuse）
 
 对话与编排调试链路每个节点一个 span（`node_type` / 输入 / 输出 / 耗时 / 错误），由 `observability/langfuse.py` 上报。

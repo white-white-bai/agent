@@ -951,6 +951,13 @@ def _parse_expires_at(raw: str) -> datetime | None:
         raise HTTPException(status_code=400, detail="expires_at 不是合法 ISO 时间") from exc
 
 
+@router.get("/sandbox/status", dependencies=[Depends(require_admin)])
+def sandbox_status_endpoint() -> dict[str, Any]:
+    from agent_platform.engine.code_sandbox import sandbox_status
+
+    return {"data": sandbox_status(get_settings())}
+
+
 @router.get("/agent-traces", dependencies=[Depends(require_permission("agent:read"))])
 def list_agent_trace_logs(
     tenant_code: str = "",

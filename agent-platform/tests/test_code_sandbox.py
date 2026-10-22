@@ -75,6 +75,43 @@ def test_docker_mode_builds_isolated_command(monkeypatch):
     assert json.loads(kwargs["input"])["inputs"] == {"n": 21}
 
 
+def test_require_isolation_blocks_inprocess(monkeypatch):
+    monkeypatch.setattr(
+        code_sandbox,
+        "get_settings",
+        lambda: _settings(code_sandbox_mode="inprocess", code_sandbox_require_isolation=True),
+    )
+    monkeypatch.setattr(code_sandbox.shutil, "which", lambda name: None)
+
+    with pytest.raises(CodeExecutionError, match="强制隔离"):
+        run_code(_config(), {"n": 21})
+
+
+def test_require_pinned_image_blocks_latest_tag(monkeypatch):
+    monkeypatch.setattr(
+        code_sandbox,
+        "get_settings",
+        lambda: _settings(code_sandbox_require_pinned_image=True),
+    )
+    monkeypatch.setattr(code_sandbox.shutil, "which", lambda name: "/usr/bin/docker")
+
+    with pytest.raises(CodeExecutionError, match="未固定摘要"):
+        run_code(_config(), {"n": 21})
+
+
+def test_sandbox_status_reports_policy_gaps(monkeypatch):
+    settings = _settings(
+        code_sandbox_require_isolation=True,
+        code_sandbox_required_runtime="runsc",
+    )
+    monkeypatch.setattr(code_sandbox.shutil, "which", lambda name: "/usr/bin/docker")
+
+    status = code_sandbox.sandbox_status(settings)
+
+    assert status["ready"] is False
+    assert any("runtime 不符" in issue for issue in status["issues"])
+
+
 def test_docker_missing_binary_fails_closed(monkeypatch):
     monkeypatch.setattr(code_sandbox, "get_settings", lambda: _settings())
     monkeypatch.setattr(code_sandbox.shutil, "which", lambda name: None)

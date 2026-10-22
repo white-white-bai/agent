@@ -79,6 +79,10 @@ class Settings(BaseSettings):
     code_sandbox_allowed_images: str = ""
     code_sandbox_runtime: str = ""
     code_sandbox_seccomp_profile: str = ""
+    # 生产强制隔离：开启后 inprocess / docker 不可用 / 镜像未固定 / runtime 不符都会失败关闭
+    code_sandbox_require_isolation: bool = False
+    code_sandbox_require_pinned_image: bool = False
+    code_sandbox_required_runtime: str = ""
 
     # 不可信内容隔离：开启后对工具/知识/子 Agent 输出剥离指令注入并加边界标记
     prompt_guard_enabled: bool = False

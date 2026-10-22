@@ -45,6 +45,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_db()
     agents_seed.seed()
     settings = get_settings()
+    from agent_platform.engine.code_sandbox import assert_sandbox_ready
+
+    assert_sandbox_ready(settings)
     if settings.admin_auth_enabled:
         accounts_core.seed()
     outbox_task = None

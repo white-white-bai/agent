@@ -96,6 +96,12 @@ def _run_docker(config: CodeConfig, variables: dict[str, Any], settings: Any) ->
     ]
     if allowed and image not in allowed:
         raise CodeExecutionError(f"代码沙箱镜像不在白名单：{image}")
+    if getattr(settings, "code_sandbox_require_pinned_image", False) and not _pinned(image):
+        raise CodeExecutionError(f"代码沙箱镜像未固定摘要：{image}")
+    required_runtime = str(getattr(settings, "code_sandbox_required_runtime", "") or "")
+    runtime = str(getattr(settings, "code_sandbox_runtime", "") or "")
+    if required_runtime and runtime != required_runtime:
+        raise CodeExecutionError(f"代码沙箱 runtime 不符：期望 {required_runtime}，实际 {runtime or '(默认)'}")
     container_name = f"ap-code-{uuid.uuid4().hex}"
     timeout = max(
         0.1,
@@ -120,6 +126,8 @@ def _run_docker(config: CodeConfig, variables: dict[str, Any], settings: Any) ->
         "ALL",
         "--security-opt",
         "no-new-privileges",
+        "--log-driver",
+        "none",
     ]
     runtime = str(getattr(settings, "code_sandbox_runtime", "") or "")
     if runtime:
@@ -136,6 +144,8 @@ def _run_docker(config: CodeConfig, variables: dict[str, Any], settings: Any) ->
             "1",
             "--ulimit",
             "nofile=64:64",
+            "--ulimit",
+            "nproc=64:64",
             "--memory",
             str(getattr(settings, "code_sandbox_memory", "128m") or "128m"),
             "--memory-swap",
@@ -187,11 +197,74 @@ def _run_docker(config: CodeConfig, variables: dict[str, Any], settings: Any) ->
     return _shape_result(config, result)
 
 
+def _pinned(image: str) -> bool:
+    return "@sha256:" in (image or "")
+
+
+def sandbox_status(settings: Any = None) -> dict[str, Any]:
+    """返回沙箱策略自检结果；不启动容器，只检查配置与 docker 可执行文件。"""
+    settings = settings or get_settings()
+    mode = str(getattr(settings, "code_sandbox_mode", "inprocess") or "inprocess").lower()
+    image = str(getattr(settings, "code_sandbox_image", "python:3.11-slim") or "python:3.11-slim")
+    runtime = str(getattr(settings, "code_sandbox_runtime", "") or "")
+    required_runtime = str(getattr(settings, "code_sandbox_required_runtime", "") or "")
+    require_isolation = bool(getattr(settings, "code_sandbox_require_isolation", False))
+    require_pinned = bool(getattr(settings, "code_sandbox_require_pinned_image", False))
+    docker = shutil.which("docker")
+    allowed = [
+        item.strip()
+        for item in str(getattr(settings, "code_sandbox_allowed_images", "") or "").split(",")
+        if item.strip()
+    ]
+    issues: list[str] = []
+    if mode not in ("inprocess", "docker"):
+        issues.append(f"未知沙箱模式：{mode}")
+    if require_isolation:
+        if mode != "docker":
+            issues.append("要求隔离但 AP_CODE_SANDBOX_MODE 不是 docker")
+        if not docker:
+            issues.append("要求隔离但未找到 docker")
+    if mode == "docker" and not docker:
+        issues.append("docker 模式但未找到 docker")
+    if allowed and image not in allowed:
+        issues.append(f"镜像不在白名单：{image}")
+    if require_pinned and not _pinned(image):
+        issues.append(f"镜像未固定摘要：{image}")
+    if required_runtime and runtime != required_runtime:
+        issues.append(f"runtime 不符：期望 {required_runtime}，实际 {runtime or '(默认)'}")
+    return {
+        "mode": mode,
+        "docker_available": bool(docker),
+        "image": image,
+        "image_pinned": _pinned(image),
+        "runtime": runtime,
+        "required_runtime": required_runtime,
+        "require_isolation": require_isolation,
+        "require_pinned_image": require_pinned,
+        "issues": issues,
+        "ready": not issues,
+    }
+
+
+def assert_sandbox_ready(settings: Any = None) -> dict[str, Any]:
+    """启动/执行前校验策略；强制隔离不满足时失败关闭。"""
+    status = sandbox_status(settings)
+    enforced = (
+        status["require_isolation"]
+        or status["require_pinned_image"]
+        or bool(status["required_runtime"])
+    )
+    if enforced and not status["ready"]:
+        raise CodeExecutionError("代码沙箱未满足强制隔离：" + "；".join(status["issues"]))
+    return status
+
+
 def run_code(config: CodeConfig, variables: dict[str, Any]) -> dict[str, Any]:
     if not config.code.strip():
         raise CodeExecutionError("代码节点为空")
     settings = get_settings()
-    mode = str(getattr(settings, "code_sandbox_mode", "inprocess") or "inprocess").lower()
+    status = assert_sandbox_ready(settings)
+    mode = status["mode"]
     if mode == "docker":
         return _run_docker(config, variables, settings)
     return _run_inprocess(config, variables)
