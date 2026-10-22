@@ -42,6 +42,7 @@ export const resumeRun = (threadId, body, onEvent, options) =>
 export const cancelRun = (threadId) => request(`/admin/runs/${threadId}/cancel`, { method: 'POST' })
 export const listHitlActions = (params) => request('/admin/hitl-actions', { params })
 export const listAgentTraces = (params) => request('/admin/agent-traces', { params })
+export const getAgentTraceStats = (params) => request('/admin/agent-traces/stats', { params })
 
 // Agent 应用：配置 / 发布 / 版本 / 调试运行
 export const getAgentApp = (uuid) => request(`/admin/apps/${uuid}/agent`)

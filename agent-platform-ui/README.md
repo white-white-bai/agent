@@ -22,7 +22,7 @@ agent 中台的独立管理端。Vue 3 + Vite + Element Plus + Pinia + vue-route
 | `/memory` | `MemoryView` | 用户级长期记忆：筛选 / 增删改 / 召回测试 / 按用户清除 / 按当前模型重建向量 / 开关只读回显 |
 | `/runs` | `RunsView` | 管理端运行记录：等待审批的 HITL 运行、审批/恢复、取消、审批人/时间、状态筛选 |
 | `/hitl-audits` | `HitlAuditsView` | HITL 外部审批审计：类型/租户/thread 筛选，展示 interrupt、决策与时间 |
-| `/agent-traces` | `AgentTracesView` | Agent 生产运行轨迹：问题、工具路径、耗时、状态与 tool_events 详情 |
+| `/agent-traces` | `AgentTracesView` | Agent 生产运行轨迹：问题、工具路径、耗时、状态、聚合看板（平均/P95/工具 Top）与 tool_events 详情 |
 | `/guards` | `GuardsView` | 护栏总开关、敏感词、配额 / 限流 / 轮次、兜底回复 |
 | `/accounts` | `AccountsView` | 账号与角色 |
 | `/metrics` | `MetricsView` | 监控看板（会话 / 消息 / 满意度 / Token / 异常趋势） |

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import uuid
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func, select
@@ -66,3 +68,53 @@ def list_traces(
             ).all()
         )
         return rows, total
+
+
+def trace_stats(
+    tenant_code: str = "",
+    *,
+    app_uuid: str = "",
+    days: int = 7,
+    limit: int = 10000,
+) -> dict[str, Any]:
+    """轨迹聚合：状态、耗时、工具使用与每日趋势。"""
+    days = min(max(int(days or 7), 1), 90)
+    today = datetime.now(timezone.utc).replace(tzinfo=None).date()
+    start_date = today - timedelta(days=days - 1)
+    since = datetime(start_date.year, start_date.month, start_date.day)
+    with session_scope() as session:
+        stmt = select(AgentTraceLog).where(AgentTraceLog.created_at >= since)
+        if tenant_code:
+            stmt = stmt.where(AgentTraceLog.tenant_code == tenant_code)
+        if app_uuid:
+            stmt = stmt.where(AgentTraceLog.app_uuid == app_uuid)
+        rows = list(
+            session.scalars(
+                stmt.order_by(AgentTraceLog.id.desc()).limit(min(max(int(limit or 10000), 1), 50000))
+            ).all()
+        )
+    durations = sorted(int(row.duration_ms or 0) for row in rows)
+    p95 = durations[min(round(len(durations) * 0.95) - 1, len(durations) - 1)] if durations else 0
+    tools: Counter[str] = Counter()
+    statuses: Counter[str] = Counter()
+    daily: dict[str, int] = {}
+    for offset in range(days):
+        daily[(start_date + timedelta(days=offset)).isoformat()] = 0
+    for row in rows:
+        statuses[str(row.status or "completed")] += 1
+        for item in row.tool_calls or []:
+            tools[str(item)] += 1
+        day = row.created_at.date().isoformat() if row.created_at else ""
+        if day in daily:
+            daily[day] += 1
+    return {
+        "total": len(rows),
+        "statuses": dict(statuses),
+        "avg_duration_ms": round(sum(durations) / len(durations), 1) if durations else 0,
+        "p95_duration_ms": p95,
+        "avg_tool_calls": round(sum(len(row.tool_calls or []) for row in rows) / len(rows), 2) if rows else 0,
+        "avg_token_chars": round(sum(int(row.token_chars or 0) for row in rows) / len(rows), 1) if rows else 0,
+        "top_tools": [{"tool": name, "count": count} for name, count in tools.most_common(10)],
+        "daily": [{"date": day, "count": count} for day, count in sorted(daily.items())],
+        "days": days,
+    }

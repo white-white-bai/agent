@@ -70,6 +70,16 @@ vi.mock('@/api', () => ({
   cancelRun: vi.fn(async () => ({})),
   listHitlActions: vi.fn(async () => ({ items: [], total: 0 })),
   listAgentTraces: vi.fn(async () => ({ items: [], total: 0 })),
+  getAgentTraceStats: vi.fn(async () => ({
+    total: 0,
+    statuses: {},
+    avg_duration_ms: 0,
+    p95_duration_ms: 0,
+    avg_tool_calls: 0,
+    avg_token_chars: 0,
+    top_tools: [],
+    daily: [],
+  })),
   getMemoryConfig: vi.fn(async () => ({ enabled: false, write_enabled: false, recall_enabled: false })),
   listUserMemories: vi.fn(async () => ({ items: [], total: 0 })),
   aggregateUserMemories: vi.fn(async () => ({ user_key: 'u1', apps: [], total: 0 })),
@@ -112,6 +122,7 @@ import PromptsView from '@/views/PromptsView.vue'
 import MemoryView from '@/views/MemoryView.vue'
 import RunsView from '@/views/RunsView.vue'
 import AgentConfigView from '@/views/AgentConfigView.vue'
+import AgentTracesView from '@/views/AgentTracesView.vue'
 
 const flush = () => flushPromises()
 
@@ -455,6 +466,29 @@ describe('RunsView', () => {
     expect(wrapper.text()).toContain('thread-1')
     expect(wrapper.text()).toContain('interrupted')
     expect(wrapper.text()).toContain('审批/恢复')
+  })
+})
+
+describe('AgentTracesView', () => {
+  it('shows aggregate trace stats and tool usage', async () => {
+    api.getAgentTraceStats.mockResolvedValueOnce({
+      total: 3,
+      statuses: { completed: 3 },
+      avg_duration_ms: 120,
+      p95_duration_ms: 200,
+      avg_tool_calls: 1.5,
+      avg_token_chars: 30,
+      top_tools: [{ tool: 'weather', count: 2 }],
+      daily: [],
+    })
+
+    const { wrapper } = await mountView(AgentTracesView)
+
+    expect(api.listAgentTraces).toHaveBeenCalled()
+    expect(api.getAgentTraceStats).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('总轨迹')
+    expect(wrapper.text()).toContain('120 ms')
+    expect(wrapper.text()).toContain('weather × 2')
   })
 })
 

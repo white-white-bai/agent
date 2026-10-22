@@ -1,7 +1,7 @@
 """Agent 生产轨迹持久化：保存、查询与工具事件字段。"""
 from __future__ import annotations
 
-from agent_platform.core.agent_trace import list_traces, save_trace
+from agent_platform.core.agent_trace import list_traces, save_trace, trace_stats
 
 
 def test_save_and_list_agent_trace():
@@ -28,3 +28,11 @@ def test_save_and_list_agent_trace():
     assert row.tool_events[0]["args"] == {"city": "常州"}
     assert row.answer == "常州晴"
     assert row.duration_ms == 1000
+
+    stats = trace_stats("t", app_uuid="app-1")
+    assert stats["total"] == 1
+    assert stats["statuses"] == {"completed": 1}
+    assert stats["avg_duration_ms"] == 1000
+    assert stats["p95_duration_ms"] == 1000
+    assert stats["top_tools"] == [{"tool": "weather", "count": 1}]
+    assert stats["daily"][-1]["count"] == 1

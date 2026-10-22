@@ -958,6 +958,22 @@ def sandbox_status_endpoint() -> dict[str, Any]:
     return {"data": sandbox_status(get_settings())}
 
 
+@router.get("/agent-traces/stats", dependencies=[Depends(require_permission("agent:read"))])
+def agent_trace_stats(
+    tenant_code: str = "",
+    app_uuid: str = "",
+    days: int = 7,
+    principal: AdminPrincipal = Depends(get_current_admin),
+) -> dict[str, Any]:
+    return {
+        "data": agent_trace_store.trace_stats(
+            _tenant(principal, tenant_code),
+            app_uuid=app_uuid,
+            days=days,
+        )
+    }
+
+
 @router.get("/agent-traces", dependencies=[Depends(require_permission("agent:read"))])
 def list_agent_trace_logs(
     tenant_code: str = "",
