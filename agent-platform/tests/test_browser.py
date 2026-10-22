@@ -341,6 +341,55 @@ async def test_browser_captcha_detection_does_not_bypass(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_browser_look_sends_screenshot_to_vision_model(monkeypatch):
+    from agent_platform.models import factory as model_factory
+
+    seen: dict = {}
+
+    class FakeVision:
+        async def ainvoke(self, messages):
+            seen["messages"] = messages
+            return SimpleNamespace(content="页面是登录页，有账号和密码输入框。")
+
+    def fake_model(**kwargs):
+        seen["model"] = kwargs
+        return FakeVision()
+
+    monkeypatch.setattr(
+        model_factory,
+        "resolve_llm_model",
+        lambda settings, provider: ("vision", {"model": "vision-pro", "base_url": "https://v", "api_key": "k"}),
+    )
+    monkeypatch.setattr("langchain_openai.ChatOpenAI", fake_model)
+    session = browser.BrowserSession(
+        SimpleNamespace(browser_max_chars=100, browser_vision_provider="vision")
+    )
+
+    class Page(_FakePage):
+        async def screenshot(self, **kwargs):
+            return b"png-bytes"
+
+    session._page = Page()
+    result = await session.look("页面是什么？")
+
+    assert "登录页" in result
+    assert seen["model"]["model"] == "vision-pro"
+    content = seen["messages"][0].content
+    assert content[0] == {"type": "text", "text": "页面是什么？"}
+    assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_browser_look_tool_only_assembled_when_vision_enabled():
+    disabled = browser.build_browser_tools(SimpleNamespace(browser_enabled=True), "th")
+    enabled = browser.build_browser_tools(
+        SimpleNamespace(browser_enabled=True, browser_vision_enabled=True), "th"
+    )
+
+    assert "browser_look" not in {tool.name for tool in disabled}
+    assert "browser_look" in {tool.name for tool in enabled}
+
+
+@pytest.mark.asyncio
 async def test_browser_start_fails_closed_without_playwright(monkeypatch):
     def unavailable():
         raise browser.BrowserUnavailable("playwright missing")

@@ -266,6 +266,43 @@ class BrowserSession:
         await page.screenshot(path=str(path), full_page=True)
         return str(path)
 
+    async def look(self, question: str = "") -> str:
+        """截图并交给多模态模型理解；只返回文字，不落盘。"""
+        import base64
+
+        from langchain_core.messages import HumanMessage
+
+        from agent_platform.models.factory import resolve_llm_model
+
+        page = await self.page()
+        image = await page.screenshot(type="png", full_page=True)
+        if not isinstance(image, (bytes, bytearray)):
+            raise BrowserError("截图失败：页面未返回图片数据")
+        provider = str(getattr(self.settings, "browser_vision_provider", "") or "")
+        _, entry = resolve_llm_model(self.settings, provider)
+        model = entry.get("model") or ""
+        if not model:
+            raise BrowserError(f"视觉模型条目缺少 model 字段: {provider or 'default'}")
+        from langchain_openai import ChatOpenAI
+
+        llm = ChatOpenAI(
+            model=model,
+            base_url=entry.get("base_url") or None,
+            api_key=entry.get("api_key") or "sk-placeholder",
+            temperature=0.0,
+            max_tokens=int(getattr(self.settings, "browser_vision_max_tokens", 800) or 800),
+        )
+        prompt = question or "描述当前页面的可见内容，并指出下一步可操作的关键元素。"
+        encoded = base64.b64encode(bytes(image)).decode("ascii")
+        message = HumanMessage(
+            content=[
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}},
+            ]
+        )
+        result = await llm.ainvoke([message])
+        return str(result.content or "")[: self._limit()]
+
     async def download(self, selector: str) -> str:
         page = await self.page()
         async with page.expect_download() as info:
@@ -410,6 +447,10 @@ def build_browser_tools(
         session = await get_session(thread_id, settings)
         return _wrap(await session.screenshot(), "browser_screenshot")
 
+    async def _look(question: str = "") -> Any:
+        session = await get_session(thread_id, settings)
+        return _wrap(await session.look(question), "browser_look")
+
     async def _download(selector: str) -> Any:
         session = await get_session(thread_id, settings)
         return _wrap(await session.download(selector), "browser_download")
@@ -527,6 +568,24 @@ def build_browser_tools(
             name="browser_screenshot",
             description="截取当前页面并返回截图文件路径。",
         ),
+    ] + (
+        [
+            StructuredTool.from_function(
+                coroutine=_look,
+                name="browser_look",
+                description=(
+                    "截取当前页面并交给多模态模型理解，返回文字描述；"
+                    "可用于读取截图中的文字、布局和可操作元素。"
+                ),
+                args_schema=create_model(
+                    "browser_look_args",
+                    question=(str, Field(default="", description="可选：想从截图中了解的问题")),
+                ),
+            )
+        ]
+        if getattr(settings, "browser_vision_enabled", False)
+        else []
+    ) + [
         StructuredTool.from_function(
             coroutine=_download,
             name="browser_download",

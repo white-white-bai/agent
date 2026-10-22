@@ -115,6 +115,10 @@ class Settings(BaseSettings):
     browser_download_dir: str = ".run/downloads"
     browser_upload_dir: str = ""
     browser_storage_state: str = ""
+    # 浏览器截图理解：把截图交给多模态模型（默认关闭）
+    browser_vision_enabled: bool = False
+    browser_vision_provider: str = ""
+    browser_vision_max_tokens: int = 800
 
     # MCP 工具运行时发现：默认关闭，关闭时只用 ap_tool 声明
     tool_discovery_enabled: bool = False
