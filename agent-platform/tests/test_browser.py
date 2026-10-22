@@ -70,6 +70,11 @@ async def test_browser_tools_only_assembled_when_enabled():
     assert {
         "browser_open",
         "browser_click",
+        "browser_click_xy",
+        "browser_scroll",
+        "browser_inspect",
+        "browser_frames",
+        "browser_captcha",
         "browser_fill",
         "browser_text",
         "browser_download",
@@ -93,11 +98,17 @@ class _FakeLocator:
     async def click(self) -> None:
         return None
 
+    async def press(self, key: str) -> None:
+        self.pressed = key
+
     async def set_input_files(self, path: str) -> None:
         self.uploaded = path
 
     @property
     def first(self) -> _FakeLocator:
+        return self
+
+    def locator(self, selector: str) -> _FakeLocator:
         return self
 
 
@@ -133,8 +144,34 @@ class _FakeDownloadContext:
         return None
 
 
+class _FakeKeyboard:
+    def __init__(self) -> None:
+        self.pressed = ""
+
+    async def press(self, key: str) -> None:
+        self.pressed = key
+
+
+class _FakeMouse:
+    def __init__(self) -> None:
+        self.clicked = None
+        self.wheeled = None
+
+    async def click(self, x: float, y: float) -> None:
+        self.clicked = (x, y)
+
+    async def wheel(self, x: int, y: int) -> None:
+        self.wheeled = (x, y)
+
+
 class _FakePage:
     url = "https://example.com/page"
+    frames: tuple = ()
+    main_frame = None
+
+    def __init__(self) -> None:
+        self.keyboard = _FakeKeyboard()
+        self.mouse = _FakeMouse()
 
     async def title(self) -> str:
         return "示例页"
@@ -147,6 +184,14 @@ class _FakePage:
 
     def locator(self, selector: str) -> _FakeLocator:
         return _FakeLocator()
+
+    def frame_locator(self, selector: str) -> _FakeLocator:
+        return _FakeLocator()
+
+    async def evaluate(self, script: str) -> list:
+        return [
+            {"tag": "button", "type": "", "text": "提交", "x": 10, "y": 20, "width": 100, "height": 40},
+        ]
 
     def expect_download(self) -> _FakeDownloadContext:
         return _FakeDownloadContext()
@@ -238,6 +283,61 @@ async def test_browser_tool_wiring_and_guard(monkeypatch):
     open_tool = next(tool for tool in tools if tool.name == "browser_open")
 
     assert await open_tool.ainvoke({"url": "https://example.com"}) == "[browser_open]PAGE:https://example.com"
+
+
+@pytest.mark.asyncio
+async def test_browser_click_supports_iframe_and_coordinates():
+    session = browser.BrowserSession(SimpleNamespace(browser_max_chars=100))
+    page = _FakePage()
+    session._page = page
+
+    assert "TITLE" in await session.click("#submit", "iframe#inner")
+    await session.click_xy(12, 34)
+    await session.scroll(-200)
+
+    assert page.mouse.clicked == (12.0, 34.0)
+    assert page.mouse.wheeled == (0, -200)
+
+
+@pytest.mark.asyncio
+async def test_browser_inspect_returns_numbered_elements(tmp_path):
+    session = browser.BrowserSession(
+        SimpleNamespace(browser_max_chars=100, browser_screenshot_dir=str(tmp_path))
+    )
+    page = _FakePage()
+
+    async def screenshot(path: str = "", full_page: bool = False) -> None:
+        await asyncio.to_thread(Path(path).write_bytes, b"png")
+
+    page.screenshot = screenshot
+    session._page = page
+
+    result = await session.inspect()
+
+    assert "[1] <button> 提交 @ (60, 40)" in result
+    assert "SCREENSHOT:" in result
+
+
+@pytest.mark.asyncio
+async def test_browser_captcha_detection_does_not_bypass(monkeypatch):
+    session = browser.BrowserSession(SimpleNamespace(browser_max_chars=100))
+
+    class Locator:
+        def __init__(self, count: int) -> None:
+            self._count = count
+
+        async def count(self) -> int:
+            return self._count
+
+    class Page(_FakePage):
+        def locator(self, selector: str) -> Locator:
+            return Locator(1 if "recaptcha" in selector else 0)
+
+    session._page = Page()
+    result = await session.captcha()
+
+    assert result["found"] is True
+    assert "人工" in result["message"]
 
 
 @pytest.mark.asyncio

@@ -137,32 +137,126 @@ class BrowserSession:
         page = await self.page()
         title = await page.title()
         text = await page.locator("body").inner_text()
-        return f"URL: {page.url}\nTITLE: {title}\n{str(text)[: self._limit()]}"
+        frames = [
+            f"- {getattr(frame, 'name', '') or '(unnamed)'}: {getattr(frame, 'url', '')}"
+            for frame in getattr(page, "frames", [])
+            if frame is not getattr(page, "main_frame", frame)
+        ]
+        frame_text = f"\nFRAMES:\n{chr(10).join(frames)}" if frames else ""
+        return f"URL: {page.url}\nTITLE: {title}\n{str(text)[: self._limit()]}{frame_text}"
+
+    def _root(self, page: Any, frame_selector: str = "") -> Any:
+        if frame_selector:
+            return page.frame_locator(frame_selector)
+        return page
 
     async def goto(self, url: str) -> str:
         page = await self.page()
         await page.goto(validate_url(url, self.settings), wait_until="domcontentloaded")
         return await self.snapshot()
 
-    async def click(self, selector: str) -> str:
+    async def click(self, selector: str, frame_selector: str = "") -> str:
         page = await self.page()
-        await page.locator(selector).first.click()
+        await self._root(page, frame_selector).locator(selector).first.click()
         return await self.snapshot()
 
-    async def fill(self, selector: str, text: str) -> str:
+    async def click_xy(self, x: float, y: float) -> str:
         page = await self.page()
-        await page.locator(selector).first.fill(text)
+        await page.mouse.click(float(x), float(y))
         return await self.snapshot()
 
-    async def press(self, key: str) -> str:
+    async def scroll(self, delta_y: int) -> str:
         page = await self.page()
-        await page.keyboard.press(key)
+        await page.mouse.wheel(0, int(delta_y))
         return await self.snapshot()
 
-    async def text(self, selector: str = "") -> str:
+    async def fill(self, selector: str, text: str, frame_selector: str = "") -> str:
         page = await self.page()
-        value = await (page.locator(selector).first.inner_text() if selector else page.locator("body").inner_text())
+        await self._root(page, frame_selector).locator(selector).first.fill(text)
+        return await self.snapshot()
+
+    async def press(self, key: str, selector: str = "", frame_selector: str = "") -> str:
+        page = await self.page()
+        if selector:
+            await self._root(page, frame_selector).locator(selector).first.press(key)
+        else:
+            await page.keyboard.press(key)
+        return await self.snapshot()
+
+    async def text(self, selector: str = "", frame_selector: str = "") -> str:
+        page = await self.page()
+        root = self._root(page, frame_selector)
+        value = await (root.locator(selector).first.inner_text() if selector else root.locator("body").inner_text())
         return str(value)[: self._limit()]
+
+    async def frames(self) -> list[dict[str, Any]]:
+        page = await self.page()
+        main = getattr(page, "main_frame", None)
+        return [
+            {
+                "index": index,
+                "name": getattr(frame, "name", "") or "",
+                "url": getattr(frame, "url", "") or "",
+                "main": frame is main,
+            }
+            for index, frame in enumerate(getattr(page, "frames", []))
+        ]
+
+    async def captcha(self) -> dict[str, Any]:
+        """检测常见人机验证；不尝试绕过，交由人工处理。"""
+        page = await self.page()
+        selectors = (
+            'iframe[src*="recaptcha"]',
+            'iframe[src*="hcaptcha"]',
+            'iframe[src*="turnstile"]',
+            ".g-recaptcha",
+            ".h-captcha",
+            "[data-sitekey]",
+            'img[src*="captcha"]',
+            "#captcha",
+        )
+        found: list[str] = []
+        for selector in selectors:
+            try:
+                if await page.locator(selector).count() > 0:
+                    found.append(selector)
+            except Exception:
+                logger.debug("CAPTCHA selector 探测失败：%s", selector, exc_info=True)
+                continue
+        return {
+            "found": bool(found),
+            "selectors": found,
+            "message": "检测到人机验证，需要人工完成后再继续。" if found else "未检测到人机验证。",
+        }
+
+    async def inspect(self) -> str:
+        """返回带编号/坐标的可交互元素与截图路径，供按坐标点击。"""
+        page = await self.page()
+        elements = await page.evaluate(
+            """() => Array.from(document.querySelectorAll(
+                'a,button,input,select,textarea,[role="button"],[onclick]'
+            )).map((el) => {
+                const r = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                const text = (el.innerText || el.value || el.getAttribute('aria-label') || '').trim();
+                return {
+                    tag: el.tagName.toLowerCase(),
+                    type: el.getAttribute('type') || '',
+                    text: text.slice(0, 80),
+                    x: r.x, y: r.y, width: r.width, height: r.height,
+                    visible: r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none'
+                };
+            }).filter((e) => e.visible).slice(0, 120)"""
+        )
+        lines = []
+        for index, item in enumerate(elements or [], start=1):
+            x = round(float(item.get("x") or 0) + float(item.get("width") or 0) / 2)
+            y = round(float(item.get("y") or 0) + float(item.get("height") or 0) / 2)
+            label = item.get("text") or item.get("type") or ""
+            lines.append(f"[{index}] <{item.get('tag')}> {label} @ ({x}, {y})")
+        path = await self.screenshot()
+        body = "\n".join(lines) if lines else "（未发现可交互元素）"
+        return f"{body}\nSCREENSHOT: {path}"
 
     async def screenshot(self) -> str:
         page = await self.page()
@@ -276,21 +370,41 @@ def build_browser_tools(
         session = await get_session(thread_id, settings)
         return _wrap(await session.goto(url), "browser_open")
 
-    async def _click(selector: str) -> Any:
+    async def _click(selector: str, frame_selector: str = "") -> Any:
         session = await get_session(thread_id, settings)
-        return _wrap(await session.click(selector), "browser_click")
+        return _wrap(await session.click(selector, frame_selector), "browser_click")
 
-    async def _fill(selector: str, text: str) -> Any:
+    async def _click_xy(x: float, y: float) -> Any:
         session = await get_session(thread_id, settings)
-        return _wrap(await session.fill(selector, text), "browser_fill")
+        return _wrap(await session.click_xy(x, y), "browser_click_xy")
 
-    async def _press(key: str) -> Any:
+    async def _scroll(delta_y: int) -> Any:
         session = await get_session(thread_id, settings)
-        return _wrap(await session.press(key), "browser_press")
+        return _wrap(await session.scroll(delta_y), "browser_scroll")
 
-    async def _text(selector: str = "") -> Any:
+    async def _fill(selector: str, text: str, frame_selector: str = "") -> Any:
         session = await get_session(thread_id, settings)
-        return _wrap(await session.text(selector), "browser_text")
+        return _wrap(await session.fill(selector, text, frame_selector), "browser_fill")
+
+    async def _press(key: str, selector: str = "", frame_selector: str = "") -> Any:
+        session = await get_session(thread_id, settings)
+        return _wrap(await session.press(key, selector, frame_selector), "browser_press")
+
+    async def _text(selector: str = "", frame_selector: str = "") -> Any:
+        session = await get_session(thread_id, settings)
+        return _wrap(await session.text(selector, frame_selector), "browser_text")
+
+    async def _inspect() -> Any:
+        session = await get_session(thread_id, settings)
+        return _wrap(await session.inspect(), "browser_inspect")
+
+    async def _frames() -> Any:
+        session = await get_session(thread_id, settings)
+        return _wrap(await session.frames(), "browser_frames")
+
+    async def _captcha() -> Any:
+        session = await get_session(thread_id, settings)
+        return _wrap(await session.captcha(), "browser_captcha")
 
     async def _screenshot() -> Any:
         session = await get_session(thread_id, settings)
@@ -330,33 +444,83 @@ def build_browser_tools(
         StructuredTool.from_function(
             coroutine=_click,
             name="browser_click",
-            description="点击 CSS selector 对应的元素，返回操作后的页面文本。",
-            args_schema=create_model("browser_click_args", selector=(str, Field(..., description="CSS selector"))),
+            description=(
+                "点击 CSS selector 对应的元素（支持 Shadow DOM；iframe 内元素传 frame_selector），"
+                "返回操作后的页面文本。"
+            ),
+            args_schema=create_model(
+                "browser_click_args",
+                selector=(str, Field(..., description="CSS selector")),
+                frame_selector=(str, Field(default="", description="可选 iframe 的 CSS selector")),
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=_click_xy,
+            name="browser_click_xy",
+            description="按视口坐标点击，用于坐标式操作；可先调用 browser_inspect 获取元素中心点。",
+            args_schema=create_model(
+                "browser_click_xy_args",
+                x=(float, Field(..., description="视口 x 坐标")),
+                y=(float, Field(..., description="视口 y 坐标")),
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=_scroll,
+            name="browser_scroll",
+            description="滚动页面（正数向下、负数向上），返回操作后的页面文本。",
+            args_schema=create_model(
+                "browser_scroll_args", delta_y=(int, Field(..., description="纵向滚动像素"))
+            ),
         ),
         StructuredTool.from_function(
             coroutine=_fill,
             name="browser_fill",
-            description="在输入框中填写文本，返回操作后的页面文本。",
+            description="在输入框中填写文本（支持 Shadow DOM 与 iframe），返回操作后的页面文本。",
             args_schema=create_model(
                 "browser_fill_args",
                 selector=(str, Field(..., description="CSS selector")),
                 text=(str, Field(..., description="要填写的文本")),
+                frame_selector=(str, Field(default="", description="可选 iframe 的 CSS selector")),
             ),
         ),
         StructuredTool.from_function(
             coroutine=_press,
             name="browser_press",
-            description="按下键盘按键（如 Enter / Tab），返回操作后的页面文本。",
-            args_schema=create_model("browser_press_args", key=(str, Field(..., description="按键名"))),
+            description="按下键盘按键（如 Enter / Tab）；传 selector 时在元素上按键，支持 iframe。",
+            args_schema=create_model(
+                "browser_press_args",
+                key=(str, Field(..., description="按键名")),
+                selector=(str, Field(default="", description="可选目标元素 CSS selector")),
+                frame_selector=(str, Field(default="", description="可选 iframe 的 CSS selector")),
+            ),
         ),
         StructuredTool.from_function(
             coroutine=_text,
             name="browser_text",
-            description="读取页面正文或指定 selector 的文本。",
+            description="读取页面正文或指定 selector 的文本；支持 iframe。",
             args_schema=create_model(
                 "browser_text_args",
                 selector=(str, Field(default="", description="可选 CSS selector")),
+                frame_selector=(str, Field(default="", description="可选 iframe 的 CSS selector")),
             ),
+        ),
+        StructuredTool.from_function(
+            coroutine=_inspect,
+            name="browser_inspect",
+            description=(
+                "返回带编号与中心坐标的可交互元素（链接/按钮/输入框等）并截图；"
+                "适合配合 browser_click_xy 做坐标式操作。"
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=_frames,
+            name="browser_frames",
+            description="列出页面所有 frame/iframe 的索引、名称、URL 与是否主文档。",
+        ),
+        StructuredTool.from_function(
+            coroutine=_captcha,
+            name="browser_captcha",
+            description="检测页面是否出现 reCAPTCHA/hCaptcha/Turnstile 等验证；只提示人工处理，不绕过。",
         ),
         StructuredTool.from_function(
             coroutine=_screenshot,
